@@ -8,8 +8,7 @@ const CreateDepartmentModal = ({ isOpen, onClose, onSuccess }) => {
   const { user } = useAuthStore();
   const [formData, setFormData] = useState({
     name: '',
-    description: '',
-    hod: ''
+    description: ''
   });
   const [isLoading, setIsLoading] = useState(false);
 
@@ -41,8 +40,7 @@ const CreateDepartmentModal = ({ isOpen, onClose, onSuccess }) => {
       onClose();
       setFormData({
         name: '',
-        description: '',
-        hod: ''
+        description: ''
       });
     } catch (error) {
       const message = error.response?.data?.message || 'Failed to create department';
@@ -112,28 +110,6 @@ const CreateDepartmentModal = ({ isOpen, onClose, onSuccess }) => {
               placeholder="Brief description of the department..."
             />
           </div>
-
-          <div>
-            <label htmlFor="hod" className="block text-sm font-medium text-gray-700 mb-2">
-              Head of Department
-            </label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <User className="h-5 w-5 text-gray-400" />
-              </div>
-              <input
-                id="hod"
-                name="hod"
-                type="text"
-                value={formData.hod}
-                onChange={handleChange}
-                className="input-field pl-10"
-                placeholder="e.g., Dr. John Smith"
-              />
-            </div>
-          </div>
-
-
 
           {/* Action Buttons */}
           <div className="flex items-center space-x-3 pt-4">

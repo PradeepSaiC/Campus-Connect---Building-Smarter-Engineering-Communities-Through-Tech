@@ -932,7 +932,7 @@ app.put('/api/college/profile', authenticateToken, async (req, res) => {
 // Create department
 app.post('/api/college/departments', authenticateToken, async (req, res) => {
   try {
-    const { name, description, hod } = req.body;
+    const { name, description } = req.body;
     
     // Check if user is college admin
     if (req.user.type !== 'college') {
@@ -957,7 +957,6 @@ app.post('/api/college/departments', authenticateToken, async (req, res) => {
     const department = new Department({
       name,
       description: description || '',
-      hod: hod || '',
       totalStudents: 0,
       college: req.user.id
     });
@@ -1185,6 +1184,12 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
     const lines = csvContent.split('\n').filter(line => line.trim()); // Remove empty lines
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase());
     
+    console.log(`\n========== CSV UPLOAD START ==========`);
+    console.log(`Total lines in CSV (including header): ${lines.length}`);
+    console.log(`Headers: ${headers.join(', ')}`);
+    console.log(`Upload Type: ${uploadType}`);
+    console.log(`=====================================\n`);
+    
     // Validate headers based on upload type
     const requiredHeaders = ['usn', 'name', 'email'];
     if (uploadType === 'different_departments') {
@@ -1409,6 +1414,12 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
       errors: errors.length > 0 ? errors : null,
       totalProcessed: lines.length - 1
     });
+
+    console.log(`\n========== CSV UPLOAD COMPLETE ==========`);
+    console.log(`Total Processed: ${students.length}`);
+    console.log(`Successfully Inserted: ${insertedStudents.length}`);
+    console.log(`Errors: ${errors.length}`);
+    console.log(`=========================================\n`);
 
   } catch (error) {
     console.error('Upload students error:', error);

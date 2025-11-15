@@ -156,7 +156,6 @@ const DepartmentManagement = () => {
                 <p className="text-sm opacity-80 mb-2">{dept.description || 'No description'}</p>
                 <div className="flex items-center justify-between text-xs opacity-70">
                   <span>Students: {dept.totalStudents || 0}</span>
-                  <span>HOD: {dept.hod || 'Not assigned'}</span>
                 </div>
                 <div className="mt-2 flex items-center justify-between">
                   <div className="flex space-x-2">
