@@ -10,12 +10,12 @@ services:
       - key: NODE_VERSION
         value: 18.x
       - key: MONGODB_URI
-        value: your_mongodb_connection_string
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: CLOUDINARY_CLOUD_NAME
-        value: your_cloudinary_cloud_name
+        sync: false
       - key: CLOUDINARY_API_KEY
-        value: your_cloudinary_api_key
+        sync: false
       - key: CLOUDINARY_API_SECRET
-        value: your_cloudinary_api_secret
+        sync: false
