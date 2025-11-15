@@ -679,8 +679,15 @@ app.post('/api/auth/first-login', async (req, res) => {
     // Check if email was actually sent (not in no-op mode)
     const emailSent = result && result.messageId !== 'noop';
     
+    // If email wasn't sent, block registration
+    if (!emailSent) {
+      return res.status(500).json({ 
+        message: 'Email service unavailable. Registration blocked for security.' 
+      });
+    }
+    
     res.json({ 
-      message: emailSent ? 'OTP sent successfully' : 'Demo mode: Use any 6-digit number as OTP',
+      message: 'OTP sent successfully',
       student: {
         name: student.name,
         email: student.email,
