@@ -674,10 +674,13 @@ app.post('/api/auth/first-login', async (req, res) => {
       `
     };
 
-    await transporter.sendMail(mailOptions);
-
+    const result = await transporter.sendMail(mailOptions);
+    
+    // Check if email was actually sent (not in no-op mode)
+    const emailSent = result && result.messageId !== 'noop';
+    
     res.json({ 
-      message: 'OTP sent successfully',
+      message: emailSent ? 'OTP sent successfully' : 'Demo mode: Use any 6-digit number as OTP',
       student: {
         name: student.name,
         email: student.email,
