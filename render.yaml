@@ -2,13 +2,13 @@ services:
   - type: web
     name: campus-connect
     env: node
-    buildCommand: npm install && cd frontend && npm install && cd .. && npm run build
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 18.x
+        value: 20.x  # Updated to LTS version
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
