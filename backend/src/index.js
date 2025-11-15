@@ -1446,7 +1446,9 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
       departmentStats,
       autoCreatedDepartments: autoCreatedDepartments.length > 0 ? autoCreatedDepartments : null,
       errors: errors.length > 0 ? errors : null,
-      totalProcessed: lines.length - 1
+      totalProcessed: lines.length - 1,
+      skipped: (lines.length - 1) - insertedStudents.length,
+      totalDepartments: Object.keys(departmentStats).length
     });
 
     console.log(`\n========== CSV UPLOAD COMPLETE ==========`);
