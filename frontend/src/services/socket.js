@@ -40,7 +40,9 @@ class SocketService {
     } catch (_) {}
     this.lastToken = token || this.lastToken || null;
 
-    this.socket = io('http://localhost:5000', {
+    const SOCKET_URL = import.meta.env.VITE_API_URL?.replace('/api', '') || (import.meta.env.PROD ? window.location.origin : 'http://localhost:5000');
+
+    this.socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
