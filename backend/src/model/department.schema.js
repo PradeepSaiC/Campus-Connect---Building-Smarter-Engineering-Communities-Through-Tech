@@ -16,15 +16,13 @@ const departmentSchema = new mongoose.Schema({
     ref: 'College',
     required: true
   },
-  hod: {
-    type: String,
-    default: '',
-    trim: true
-  },
   totalStudents: {
     type: Number,
     default: 0
   }
 }, { timestamps: true });
+
+// Ensure unique department name per college
+departmentSchema.index({ college: 1, name: 1 }, { unique: true });
 
 export default mongoose.model('Department', departmentSchema); 
