@@ -1277,13 +1277,16 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
             continue;
           }
 
-          const departmentKey = studentData.department.toLowerCase();
+          const departmentKey = studentData.department.trim().toLowerCase();
+          console.log(`Processing student ${studentData.name} for department: "${studentData.department}" (normalized: "${departmentKey}")`);
+          console.log('Available departments:', Object.keys(departmentMap));
+          
           if (!departmentMap[departmentKey]) {
             // Auto-create new department if it doesn't exist
             try {
               const newDepartment = new Department({
-                name: studentData.department,
-                description: `Auto-created department for ${studentData.department}`,
+                name: studentData.department.trim(),
+                description: `Auto-created department for ${studentData.department.trim()}`,
                 college: req.user.id,
                 totalStudents: 0
               });
@@ -1302,9 +1305,9 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
               allDepartments.push(newDepartment);
               
               // Track auto-created departments
-              autoCreatedDepartments.push(studentData.department);
+              autoCreatedDepartments.push(studentData.department.trim());
               
-              console.log(`Auto-created department: ${studentData.department}`);
+              console.log(`Auto-created department: ${studentData.department.trim()}`);
             } catch (deptError) {
               console.error(`Error creating department ${studentData.department}:`, deptError);
               errors.push(`Row ${i + 1}: Failed to create department "${studentData.department}". Please create it manually first.`);
