@@ -1330,8 +1330,8 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
           targetDepartmentId = departmentMap[departmentKey];
         }
 
-        // Create student
-        const student = new Student({
+        // Prepare student object (don't save yet, collect for batch insert)
+        const student = {
           usn: studentData.usn,
           name: studentData.name,
           email: studentData.email,
@@ -1341,9 +1341,8 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
           address: studentData.address || '',
           isRegistered: false,
           isFirstLogin: true
-        });
+        };
 
-        await student.save();
         students.push(student);
 
         // Mark as processed
@@ -1363,8 +1362,29 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
       }
     }
 
-    // Update department and college student counts
+    // Batch insert all students
+    let insertedStudents = [];
     if (students.length > 0) {
+      try {
+        insertedStudents = await Student.insertMany(students, { ordered: false });
+        console.log(`Successfully inserted ${insertedStudents.length} students in batch`);
+      } catch (batchError) {
+        console.error('Batch insert error:', batchError);
+        // If batch insert fails, fall back to individual inserts
+        for (const studentData of students) {
+          try {
+            const student = new Student(studentData);
+            const saved = await student.save();
+            insertedStudents.push(saved);
+          } catch (e) {
+            console.error('Individual student save error:', e);
+          }
+        }
+      }
+    }
+
+    // Update department and college student counts
+    if (insertedStudents.length > 0) {
       // Update all departments' student counts
       for (const department of allDepartments) {
         const departmentStudentCount = await Student.countDocuments({ department: department._id });
@@ -1382,8 +1402,8 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
     }
 
     res.json({
-      message: `Successfully uploaded ${students.length} students`,
-      uploaded: students.length,
+      message: `Successfully uploaded ${insertedStudents.length} students`,
+      uploaded: insertedStudents.length,
       departmentStats,
       autoCreatedDepartments: autoCreatedDepartments.length > 0 ? autoCreatedDepartments : null,
       errors: errors.length > 0 ? errors : null,
