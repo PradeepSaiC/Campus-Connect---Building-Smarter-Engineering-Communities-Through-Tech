@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: campus-connect
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 18.x
+      - key: MONGODB_URI
+        value: your_mongodb_connection_string
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLOUDINARY_CLOUD_NAME
+        value: your_cloudinary_cloud_name
+      - key: CLOUDINARY_API_KEY
+        value: your_cloudinary_api_key
+      - key: CLOUDINARY_API_SECRET
+        value: your_cloudinary_api_secret
