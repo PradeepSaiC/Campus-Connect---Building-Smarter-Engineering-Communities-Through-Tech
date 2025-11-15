@@ -71,6 +71,14 @@ function App() {
             } 
           />
           <Route 
+            path="/student-register" 
+            element={
+              <PublicRoute>
+                <RegisterForm />
+              </PublicRoute>
+            } 
+          />
+          <Route 
             path="/college-login" 
             element={
               <PublicRoute>
