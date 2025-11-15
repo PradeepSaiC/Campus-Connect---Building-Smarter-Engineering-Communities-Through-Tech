@@ -15,17 +15,6 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
-  // Set static folder
-  app.use(express.static(path.join(__dirname, '../../frontend/build')));
-
-  // Handle React routing, return all requests to React app
-  app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, '../../frontend', 'build', 'index.html'));
-  });
-}
-
 import dotenv from 'dotenv';
 import agoraService from './services/agoraService.js';
 import pkg from 'agora-token';
@@ -3239,6 +3228,17 @@ app.post('/api/video-call/:callId/leave-stream', authenticateToken, async (req, 
     res.status(500).json({ message: 'Internal server error' });
   }
 });
+
+// Serve static files in production
+if (process.env.NODE_ENV === 'production') {
+  // Set static folder
+  app.use(express.static(path.join(__dirname, '../../frontend/dist')));
+
+  // Handle React routing, return all requests to React app
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, '../../frontend', 'dist', 'index.html'));
+  });
+}
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
