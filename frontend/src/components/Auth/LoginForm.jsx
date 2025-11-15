@@ -125,6 +125,18 @@ const LoginForm = () => {
                 )}
               </button>
             </form>
+
+            <div className="mt-6 text-center">
+              <p className="text-sm opacity-70">
+                Haven't registered yet?{' '}
+                <button
+                  onClick={() => navigate('/student-register')}
+                  className="font-medium text-primary-600 hover:text-primary-500"
+                >
+                  Sign up here
+                </button>
+              </p>
+            </div>
           </div>
         </div>
       </div>

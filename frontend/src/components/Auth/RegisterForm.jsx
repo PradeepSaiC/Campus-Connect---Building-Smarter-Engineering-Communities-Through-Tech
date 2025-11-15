@@ -445,8 +445,12 @@ const RegisterForm = () => {
 
         <div className="card bg-base-100 shadow-xl">
           <div className="card-body p-8">
-          <div className="alert alert-warning mb-6 text-sm">
-            You can register only if your college is registered on CampusConnect and has uploaded student data to the platform. Enter your USN to verify.
+          <div className="alert alert-info mb-6 text-sm">
+            <div>
+              <strong>Note:</strong> Make sure your college is registered on the platform.
+              <br />
+              You can only sign up if your college has added you to their student database.
+            </div>
           </div>
           {/* Progress Steps */}
           <div className="flex items-center justify-between mb-8">
