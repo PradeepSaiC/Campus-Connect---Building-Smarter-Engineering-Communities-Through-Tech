@@ -1183,7 +1183,7 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
     // Parse CSV
     const csvContent = req.file.buffer.toString();
     const lines = csvContent.split('\n').filter(line => line.trim()); // Remove empty lines
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, '').toLowerCase());
     
     // Validate headers based on upload type
     const requiredHeaders = ['usn', 'name', 'email'];
