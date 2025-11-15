@@ -1211,6 +1211,50 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
     const processedUSNs = new Set(); // Track USNs in current CSV
     const processedEmails = new Set(); // Track emails in current CSV
 
+    // PRE-VALIDATION: Check for duplicates within CSV BEFORE processing anything
+    const csvDuplicates = [];
+    const tempUSNs = new Set();
+    const tempEmails = new Set();
+    
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      
+      const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+      const studentData = {};
+      headers.forEach((header, index) => {
+        studentData[header] = values[index] || '';
+      });
+      
+      if (studentData.usn) {
+        const normalizedUSN = studentData.usn.toUpperCase();
+        if (tempUSNs.has(normalizedUSN)) {
+          csvDuplicates.push(`Row ${i + 1}: Duplicate USN "${studentData.usn}"`);
+        } else {
+          tempUSNs.add(normalizedUSN);
+        }
+      }
+      
+      if (studentData.email) {
+        const normalizedEmail = studentData.email.toLowerCase();
+        if (tempEmails.has(normalizedEmail)) {
+          csvDuplicates.push(`Row ${i + 1}: Duplicate Email "${studentData.email}"`);
+        } else {
+          tempEmails.add(normalizedEmail);
+        }
+      }
+    }
+    
+    // If duplicates found in CSV, reject the entire upload
+    if (csvDuplicates.length > 0) {
+      console.log(`❌ CSV validation failed: ${csvDuplicates.length} duplicate(s) found`);
+      return res.status(400).json({
+        message: `CSV contains ${csvDuplicates.length} duplicate(s). Please fix and upload a valid CSV.`,
+        errors: csvDuplicates,
+        uploaded: 0,
+        totalProcessed: 0
+      });
+    }
+
     // Get all departments for the college
     const allDepartments = await Department.find({ college: req.user.id });
     const departmentMap = {};
@@ -1236,16 +1280,6 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
           continue;
         }
 
-        // Check for duplicates within the CSV itself
-        if (processedUSNs.has(studentData.usn)) {
-          errors.push(`Row ${i + 1}: Duplicate USN ${studentData.usn} found in CSV`);
-          continue;
-        }
-        if (processedEmails.has(studentData.email)) {
-          errors.push(`Row ${i + 1}: Duplicate email ${studentData.email} found in CSV`);
-          continue;
-        }
-
         // Validate email format
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(studentData.email)) {
@@ -1254,15 +1288,16 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
         }
 
         // Check if student already exists in database (by USN or email)
+        // Case-insensitive search for USN
         const existingStudent = await Student.findOne({ 
           $or: [
-            { usn: studentData.usn },
-            { email: studentData.email }
+            { usn: { $regex: new RegExp(`^${studentData.usn}$`, 'i') } },
+            { email: studentData.email.toLowerCase() }
           ]
         });
         
         if (existingStudent) {
-          errors.push(`Row ${i + 1}: Student with USN ${studentData.usn} or email ${studentData.email} already exists in database`);
+          errors.push(`Row ${i + 1}: Student already exists - USN: ${studentData.usn}, Email: ${studentData.email}`);
           continue;
         }
 
