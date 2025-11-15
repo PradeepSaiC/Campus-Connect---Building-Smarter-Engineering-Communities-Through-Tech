@@ -140,7 +140,27 @@ const StudentUploadModal = ({ isOpen, onClose, onSuccess }) => {
       setUploadProgress(100);
       
       setUploadResult(response.data);
-      toast.success('🎉 Students uploaded successfully!');
+      
+      // Show success message
+      toast.success(`🎉 ${response.data.uploaded} students uploaded successfully!`);
+      
+      // Show errors if any
+      if (response.data.errors && response.data.errors.length > 0) {
+        const duplicateErrors = response.data.errors.filter(e => e.toLowerCase().includes('duplicate'));
+        const otherErrors = response.data.errors.filter(e => !e.toLowerCase().includes('duplicate'));
+        
+        if (duplicateErrors.length > 0) {
+          toast.error(`⚠️ ${duplicateErrors.length} duplicate(s) found in CSV - check results below`, {
+            duration: 5000
+          });
+        }
+        
+        if (otherErrors.length > 0) {
+          toast.error(`⚠️ ${otherErrors.length} error(s) occurred - check results below`, {
+            duration: 5000
+          });
+        }
+      }
       
              // Show department stats if available
        if (response.data.departmentStats) {
@@ -474,14 +494,15 @@ const StudentUploadModal = ({ isOpen, onClose, onSuccess }) => {
                    )}
                   {uploadResult.errors && uploadResult.errors.length > 0 && (
                     <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded">
-                      <p className="text-sm font-medium text-red-800 mb-2">Errors ({uploadResult.errors.length}):</p>
-                      <ul className="text-xs text-red-700 space-y-1 max-h-20 overflow-y-auto">
-                        {uploadResult.errors.slice(0, 5).map((error, index) => (
-                          <li key={index}>• {error}</li>
+                      <p className="text-sm font-medium text-red-800 mb-2">
+                        ⚠️ Errors ({uploadResult.errors.length}):
+                      </p>
+                      <ul className="text-xs text-red-700 space-y-1 max-h-40 overflow-y-auto">
+                        {uploadResult.errors.map((error, index) => (
+                          <li key={index} className="py-1">
+                            • {error}
+                          </li>
                         ))}
-                        {uploadResult.errors.length > 5 && (
-                          <li>• ... and {uploadResult.errors.length - 5} more errors</li>
-                        )}
                       </ul>
                     </div>
                   )}
