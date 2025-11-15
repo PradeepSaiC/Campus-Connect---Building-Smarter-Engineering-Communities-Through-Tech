@@ -1203,6 +1203,8 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
     const errors = [];
     const departmentStats = {};
     const autoCreatedDepartments = [];
+    const processedUSNs = new Set(); // Track USNs in current CSV
+    const processedEmails = new Set(); // Track emails in current CSV
 
     // Get all departments for the college
     const allDepartments = await Department.find({ college: req.user.id });
@@ -1229,6 +1231,16 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
           continue;
         }
 
+        // Check for duplicates within the CSV itself
+        if (processedUSNs.has(studentData.usn)) {
+          errors.push(`Row ${i + 1}: Duplicate USN ${studentData.usn} found in CSV`);
+          continue;
+        }
+        if (processedEmails.has(studentData.email)) {
+          errors.push(`Row ${i + 1}: Duplicate email ${studentData.email} found in CSV`);
+          continue;
+        }
+
         // Validate email format
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(studentData.email)) {
@@ -1236,7 +1248,7 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
           continue;
         }
 
-        // Check if student already exists (by USN or email)
+        // Check if student already exists in database (by USN or email)
         const existingStudent = await Student.findOne({ 
           $or: [
             { usn: studentData.usn },
@@ -1245,7 +1257,7 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
         });
         
         if (existingStudent) {
-          errors.push(`Row ${i + 1}: Student with USN ${studentData.usn} or email ${studentData.email} already exists`);
+          errors.push(`Row ${i + 1}: Student with USN ${studentData.usn} or email ${studentData.email} already exists in database`);
           continue;
         }
 
@@ -1333,6 +1345,10 @@ app.post('/api/college/upload-students', authenticateToken, upload.single('file'
 
         await student.save();
         students.push(student);
+
+        // Mark as processed
+        processedUSNs.add(studentData.usn);
+        processedEmails.add(studentData.email);
 
         // Track department stats
         const deptName = allDepartments.find(d => d._id.toString() === targetDepartmentId.toString())?.name || 'Unknown';
