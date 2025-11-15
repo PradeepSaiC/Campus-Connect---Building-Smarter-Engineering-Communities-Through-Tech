@@ -996,7 +996,7 @@ app.put('/api/college/departments/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    const { name, description, hod } = req.body;
+    const { name, description } = req.body;
 
     // Validate required fields
     if (!name) {
@@ -1028,7 +1028,6 @@ app.put('/api/college/departments/:id', authenticateToken, async (req, res) => {
     // Update department
     department.name = name;
     department.description = description || '';
-    department.hod = hod || '';
     
     await department.save();
 
@@ -2355,17 +2354,6 @@ function sanitizePoll(p) {
   return obj;
 }
 
-
-app.get('/api/colleges/:collegeId/departments', async (req, res) => {
-  try {
-    const departments = await Department.find({ college: req.params.collegeId })
-      .sort({ name: 1 });
-    res.json({ departments });
-  } catch (error) {
-    console.error('Get college departments error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
 
 app.get('/api/colleges/:collegeId/students', async (req, res) => {
   try {
