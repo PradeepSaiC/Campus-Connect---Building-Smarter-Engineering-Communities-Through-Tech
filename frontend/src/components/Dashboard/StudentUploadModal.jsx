@@ -189,8 +189,23 @@ const StudentUploadModal = ({ isOpen, onClose, onSuccess }) => {
       }, 3000);
       
     } catch (error) {
-      const message = error.response?.data?.message || 'Failed to upload students';
-      toast.error(`❌ ${message}`);
+      clearInterval(progressInterval);
+      setUploadProgress(0);
+      
+      const errorData = error.response?.data;
+      const message = errorData?.message || 'Failed to upload students';
+      
+      // Handle duplicate errors specially
+      if (errorData?.errors && errorData.errors.length > 0) {
+        setUploadResult({
+          uploaded: 0,
+          errors: errorData.errors,
+          message: message
+        });
+        toast.error(`❌ ${message}`, { duration: 6000 });
+      } else {
+        toast.error(`❌ ${message}`);
+      }
     } finally {
       setIsLoading(false);
       setUploadProgress(0);
@@ -239,12 +254,12 @@ const StudentUploadModal = ({ isOpen, onClose, onSuccess }) => {
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-gray-200">
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
               <Upload className="w-5 h-5 text-green-600" />
             </div>
-            <h2 className="text-xl font-semibold text-gray-900">Upload Students</h2>
+            <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Upload Students</h2>
           </div>
           <button
             onClick={onClose}
@@ -458,14 +473,29 @@ const StudentUploadModal = ({ isOpen, onClose, onSuccess }) => {
 
           {/* Upload Results */}
           {uploadResult && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <div className={uploadResult.uploaded > 0 ? "bg-green-50 border border-green-200 rounded-lg p-4" : "bg-red-50 border border-red-200 rounded-lg p-4"}>
               <div className="flex items-start space-x-3">
-                <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+                {uploadResult.uploaded > 0 ? (
+                  <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+                )}
                 <div className="flex-1">
-                  <h4 className="font-medium text-green-900 mb-2">Upload Results</h4>
-                  <p className="text-sm text-green-700 mb-2">
-                    Successfully uploaded {uploadResult.uploaded} students
-                  </p>
+                  {uploadResult.uploaded > 0 ? (
+                    <>
+                      <h4 className="font-medium text-green-900 mb-2">Upload Results</h4>
+                      <p className="text-sm text-green-700 mb-2">
+                        Successfully uploaded {uploadResult.uploaded} students
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <h4 className="font-medium text-red-900 mb-2">❌ Upload Rejected</h4>
+                      <p className="text-sm text-red-700 mb-2">
+                        {uploadResult.message || 'CSV validation failed'}
+                      </p>
+                    </>
+                  )}
                                      {uploadResult.departmentStats && (
                      <div className="text-sm text-green-700">
                        <p className="font-medium mb-1">Department Breakdown:</p>

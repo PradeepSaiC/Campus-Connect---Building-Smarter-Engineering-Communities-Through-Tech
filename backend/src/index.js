@@ -662,22 +662,38 @@ app.post('/api/auth/first-login', async (req, res) => {
     student.otpExpiry = otpExpiry;
     await student.save();
 
-    // Send email using SendGrid
-    const { sendEmail } = await import('./services/emailService.js');
-    
-    const emailResult = await sendEmail({
+    // Send email using Nodemailer
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
       to: student.email,
       subject: 'CampusConnect - OTP Verification',
-      text: `Your OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`,
       html: `
         <h2>CampusConnect OTP Verification</h2>
         <p>Your OTP is: <strong>${otp}</strong></p>
         <p>This OTP will expire in 10 minutes.</p>
       `
-    });
-    
-    // If email wasn't sent, block registration
-    if (!emailResult.success) {
+    };
+
+    try {
+      await transporter.sendMail(mailOptions);
+      res.json({ 
+        message: 'OTP sent successfully',
+        student: {
+          name: student.name,
+          email: student.email,
+          usn: student.usn,
+          department: student.department ? {
+            id: student.department._id,
+            name: student.department.name
+          } : null,
+          college: student.college ? {
+            id: student.college._id,
+            collegeName: student.college.collegeName
+          } : null
+        }
+      });
+    } catch (emailError) {
+      console.error('Email sending error:', emailError);
       return res.status(500).json({ 
         message: 'Email service unavailable. Registration blocked for security.' 
       });

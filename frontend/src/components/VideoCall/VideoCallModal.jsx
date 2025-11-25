@@ -167,30 +167,86 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
 
       // Remote user handlers
       client.on('user-published', async (user, mediaType) => {
-        await client.subscribe(user, mediaType);
-        if (mediaType === 'video') {
-          // Force low stream and set audio-fallback for poor network
-          try { await client.setRemoteVideoStreamType?.(user, 1); } catch (_) {}
-          try { await client.setStreamFallbackOption?.(user, 2); } catch (_) {}
-          setRemoteStream(user);
-          if (remoteVideoRef.current) {
-            try { remoteVideoRef.current.innerHTML = ''; } catch (_) {}
-            user.videoTrack?.play(remoteVideoRef.current, { mirror: false });
+        console.log(`User ${user.uid} published ${mediaType}`);
+        console.log('Has audio:', user.hasAudio, 'Has video:', user.hasVideo);
+        
+        try {
+          await client.subscribe(user, mediaType);
+          console.log(`Subscribed to ${mediaType} for user ${user.uid}`);
+          
+          if (mediaType === 'video') {
+            // Force low stream and set audio-fallback for poor network
+            try { 
+              await client.setRemoteVideoStreamType?.(user, 1);
+              console.log('Set remote video stream type to low for user:', user.uid);
+            } catch (e) { 
+              console.warn('Failed to set remote video stream type:', e);
+            }
+            
+            try { 
+              await client.setStreamFallbackOption?.(user, 2);
+              console.log('Set stream fallback option for user:', user.uid);
+            } catch (e) { 
+              console.warn('Failed to set stream fallback option:', e);
+            }
+            
+            setRemoteStream(user);
+            if (remoteVideoRef.current) {
+              try { 
+                remoteVideoRef.current.innerHTML = ''; 
+                user.videoTrack?.play(remoteVideoRef.current, { mirror: false });
+                console.log('Playing video track for user:', user.uid);
+              } catch (e) {
+                console.error('Error playing video track:', e);
+              }
+            }
           }
+          
+          if (mediaType === 'audio') {
+            try {
+              if (user.audioTrack) {
+                console.log('Audio track state before play:', {
+                  enabled: user.audioTrack.isPlaying,
+                  muted: user.audioTrack.isMuted
+                });
+                await user.audioTrack.setEnabled(true);
+                await user.audioTrack.play();
+                console.log('Successfully playing audio track for user:', user.uid);
+              } else {
+                console.warn('No audio track found for user:', user.uid);
+              }
+            } catch (e) {
+              console.error('Error playing audio track:', e);
+            }
+          }
+          
+          setParticipantCount((c) => Math.max(1, c + 1));
+        } catch (e) {
+          console.error(`Failed to handle ${mediaType} for user ${user.uid}:`, e);
         }
-        if (mediaType === 'audio') {
-          user.audioTrack?.play();
-        }
-        setParticipantCount((c) => Math.max(1, c + 1));
       });
       client.on('user-unpublished', (user, mediaType) => {
+        console.log(`User ${user.uid} unpublished ${mediaType}`);
+        
         if (mediaType === 'video') {
           setRemoteStream(null);
+          console.log('Cleared remote video stream');
         }
+        
         if (mediaType === 'audio') {
-          try { user.audioTrack?.stop(); } catch (_) {}
+          try { 
+            if (user.audioTrack) {
+              console.log('Stopping audio track for user:', user.uid);
+              user.audioTrack.stop();
+              user.audioTrack.close();
+            }
+          } catch (e) {
+            console.warn('Error stopping audio track:', e);
+          }
         }
+        
         setParticipantCount((c) => Math.max(1, c - 1));
+        console.log('Participant count updated');
       });
       client.on('connection-state-change', async (curState, prevState) => {
         try {

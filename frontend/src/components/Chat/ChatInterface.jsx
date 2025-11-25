@@ -378,9 +378,9 @@ const ChatInterface = function() {
   }
 
   return (
-    <div className="h-[calc(100vh-80px)] bg-base-100 rounded-xl shadow-sm border border-base-200 flex">
-      {/* Chat List */}
-      <div className="w-80 border-r border-base-200 flex flex-col">
+    <div className="h-[calc(100vh-80px)] bg-base-100 rounded-xl shadow-sm border border-base-200 flex flex-col md:flex-row">
+      {/* Chat List - Hidden on mobile when chat is open */}
+      <div className={`md:w-80 border-r border-base-200 flex flex-col ${currentChat && 'hidden md:flex'}`}>
         {/* Search */}
         <div className="p-4 border-b border-base-200">
           <div className="relative">
@@ -453,7 +453,7 @@ const ChatInterface = function() {
       </div>
 
       {/* Chat Messages */}
-      <div className="flex-1 flex flex-col">
+      <div className={`flex-1 flex flex-col ${!currentChat && 'hidden md:flex'}`}>
         {currentChat ? (
           <>
             {/* Chat Header */}
@@ -477,7 +477,7 @@ const ChatInterface = function() {
                 <button
                   onClick={handleStartVideoCall}
                   disabled={!currentChat}
-                  className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
+                  className={`px-3 py-2 rounded-lg transition-colors flex items-center space-x-2 text-sm ${
                     currentChat 
                       ? 'bg-green-600 text-white hover:bg-green-700 shadow-lg' 
                       : 'bg-gray-400 text-gray-200 cursor-not-allowed'

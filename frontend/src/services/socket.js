@@ -135,6 +135,13 @@ class SocketService {
       window.location.href = '/login';
     });
 
+    // Video call ended by other participant
+    this.socket.on('call_ended', (data) => {
+      console.log('📞 Call ended by other participant:', data);
+      // Dispatch custom event that CallStudio can listen to
+      window.dispatchEvent(new CustomEvent('call_ended', { detail: data }));
+    });
+
     // Authenticate if we already have token in first connect flow
     if (this.lastToken) {
       this.socket.emit('authenticate', this.lastToken);

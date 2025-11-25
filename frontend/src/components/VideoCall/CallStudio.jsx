@@ -255,6 +255,22 @@ const CallStudio = () => {
           }
         });
 
+        // Handle call ended event from server
+        const handleCallEnded = (event) => {
+          toast.success('Call ended by other participant');
+          setTimeout(() => {
+            try { window.close(); } catch (_) {}
+          }, 1000);
+        };
+        
+        // Add event listener for call_ended
+        window.addEventListener('call_ended', handleCallEnded);
+        
+        // Clean up event listener
+        return () => {
+          window.removeEventListener('call_ended', handleCallEnded);
+        };
+
         // Use the same UID/account the backend signed into the token.
         const joinUid = uidFromServer || String(user?.id || user?._id || '');
         const tryJoin = async () => {
