@@ -193,6 +193,8 @@ const CallStudio = () => {
             stereo: false,
             sampleRate: 32000, // Lower sample rate for faster processing
             codec: 'aac'
+          }
+        });
         
         clientRef.current = client;
         
