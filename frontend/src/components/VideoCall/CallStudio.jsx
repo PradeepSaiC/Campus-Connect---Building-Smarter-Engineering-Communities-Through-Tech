@@ -35,19 +35,42 @@ const CallStudio = () => {
   const localRef = useRef(null);
 
   const playInto = (track, container) => {
-    if (!container) return;
+    if (!container || !track) return;
     try { container.innerHTML = ''; } catch (_) {}
-    try { track.play(container, { mirror: false }); } catch (_) {}
-    try {
-      const v = container.querySelector('video');
-      if (v) {
-        v.style.width = '100%';
-        v.style.height = '100%';
-        v.style.objectFit = 'cover';
-        v.style.transform = 'none';
-        v.classList?.remove?.('agora-video-player--mirror');
+    try { 
+      if (track.getMediaStreamTrack) {
+        console.log('Playing track:', track.getMediaStreamTrack().kind);
       }
-    } catch (_) {}
+      track.play(container, { 
+        mirror: false,
+        // Ensure audio plays even when tab is in background
+        audio: true
+      }); 
+    } catch (e) { 
+      console.error('Error playing track:', e);
+    }
+    try {
+      const mediaElement = container.querySelector('video, audio');
+      if (mediaElement) {
+        mediaElement.style.width = '100%';
+        mediaElement.style.height = '100%';
+        mediaElement.style.objectFit = 'cover';
+        mediaElement.style.transform = 'none';
+        mediaElement.classList?.remove?.('agora-video-player--mirror');
+        // Ensure audio plays even when tab is in background
+        mediaElement.setAttribute('playsinline', 'true');
+        mediaElement.setAttribute('muted', 'false');
+        // Force play to ensure audio works on all browsers
+        const playPromise = mediaElement.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.error('Auto-play failed:', error);
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Error setting up media element:', e);
+    }
   };
 
   const ensureRemoteContainer = (uid) => {
@@ -70,30 +93,75 @@ const CallStudio = () => {
         const cred = await videoCallAPI.getCredentials();
         const appId = cred?.data?.appId;
         if (!appId) throw new Error('Agora App ID missing');
-        // Acquire call credentials
-        let channelName = null, token = null, uidFromServer = null, tries = 0;
-        if (isAcceptFlow && !isCaller) {
-          // If opened via Accept button, fetch receiver-specific credentials first
-          try {
-            setJoinStatus('Joining...');
-            const acc = await videoCallAPI.acceptCall(callId);
-            channelName = acc?.data?.channelName || channelName;
-            token = acc?.data?.token || token;
-            uidFromServer = acc?.data?.uid || acc?.data?.account || uidFromServer;
-          } catch (_) {}
-        }
-        // If still missing, poll shared credentials until ready
-        while (tries < 15 && (!channelName || !token)) {
-          try {
-            const callCred = await videoCallAPI.getCallCredentials(callId);
-            channelName = callCred?.data?.channelName || channelName;
-            token = callCred?.data?.token || token;
-            uidFromServer = callCred?.data?.uid || callCred?.data?.account || uidFromServer;
-            if (channelName && token) break;
-          } catch (_) {}
-          setJoinStatus('Joining...');
-          await new Promise(r => setTimeout(r, 800));
-          tries += 1;
+        // Optimized credential acquisition with parallel requests and timeout
+        setJoinStatus('Connecting...');
+        let channelName = null, token = null, uidFromServer = null;
+        const maxRetries = 3;
+        let lastError = null;
+
+        // Try to get credentials with retries
+        const getCredentials = async () => {
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              // Try both acceptCall and getCallCredentials in parallel
+              const [acceptRes, callCred] = await Promise.allSettled([
+                isAcceptFlow && !isCaller ? videoCallAPI.acceptCall(callId) : Promise.resolve(null),
+                videoCallAPI.getCallCredentials(callId)
+              ]);
+
+              // Check which request was successful
+              if (acceptRes?.status === 'fulfilled' && acceptRes.value?.data) {
+                return acceptRes.value.data;
+              }
+              if (callCred?.status === 'fulfilled' && callCred.value?.data) {
+                return callCred.value.data;
+              }
+              
+              // If we have partial data, use it
+              const partialData = {
+                ...(acceptRes?.value?.data || {}),
+                ...(callCred?.value?.data || {})
+              };
+              if (partialData.channelName && partialData.token) {
+                return partialData;
+              }
+              
+              throw new Error('Failed to get valid credentials');
+              
+            } catch (error) {
+              lastError = error;
+              if (attempt < maxRetries) {
+                // Exponential backoff with jitter
+                const delay = Math.min(500 * Math.pow(2, attempt) + Math.random() * 200, 2000);
+                await new Promise(r => setTimeout(r, delay));
+              }
+            }
+          }
+          throw lastError || new Error('Failed to get call credentials');
+        };
+
+        try {
+          const credentials = await Promise.race([
+            getCredentials(),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Connection timeout')), 10000) // 10s timeout
+            )
+          ]);
+          
+          channelName = credentials.channelName;
+          token = credentials.token;
+          uidFromServer = credentials.uid || credentials.account || String(user?.id || user?._id || '');
+          
+          if (!channelName || !token) {
+            throw new Error('Invalid credentials received');
+          }
+          
+        } catch (error) {
+          console.error('Failed to get call credentials:', error);
+          toast.error('Failed to connect to call. Please try again.');
+          setJoinStatus('Connection failed');
+          setTimeout(() => window.close(), 2000);
+          return;
         }
         if (!channelName || !token) throw new Error('Call credentials missing');
 
@@ -105,31 +173,26 @@ const CallStudio = () => {
         // Use VP9 for Chrome/Edge, H264 for Safari/Firefox
         const codec = (ua.includes('chrome') || ua.includes('edg/')) && !isSafari ? 'vp9' : 'h264';
         
-        // Create client with optimized settings for low latency
+        // Create client with optimized settings for faster connection
         const client = AgoraRTC.createClient({ 
-          mode: 'rtc', 
-          codec,
-          // Enable low-latency mode
+          mode: 'rtc',
+          codec: 'vp8', // Use VP8 for better compatibility and faster connection
           enableLowLatency: true,
+          // Optimize connection settings for faster join
+          enableAudioVolumeIndicator: true,
+          // Use UDP first for faster connection, fallback to TCP if needed
+          transport: {
+            udp: true,
+            tcp: true,
+            websocket: true
+          },
           // Optimize for real-time communication
           audioEncoderConfiguration: {
-            bitrateMax: 64,
-            bitrateMin: 32,
+            bitrateMax: 32,
+            bitrateMin: 16,
             stereo: false,
-            sampleRate: 48000,
+            sampleRate: 32000, // Lower sample rate for faster processing
             codec: 'aac'
-          },
-          // Optimize video codec settings
-          videoEncoderConfiguration: {
-            width: 1280,
-            height: 720,
-            frameRate: 30,
-            bitrateMax: 1200,
-            bitrateMin: 300,
-            degradationPreference: 'maintain-framerate',
-            codec: codec === 'vp9' ? 'vp9' : 'h264'
-          }
-        });
         
         clientRef.current = client;
         
@@ -164,18 +227,65 @@ const CallStudio = () => {
         }
 
         client.on('user-published', async (user, mediaType) => {
-          try { await client.subscribe(user, mediaType); } catch (_) { return; }
+          console.log(`User ${user.uid} published ${mediaType}`);
+          try { 
+            await client.subscribe(user, mediaType); 
+            console.log(`Subscribed to ${mediaType} from user ${user.uid}`);
+          } catch (e) { 
+            console.error(`Failed to subscribe to ${mediaType}:`, e);
+            return; 
+          }
+          
           const uid = String(user.uid || '');
           const prev = remoteUsersRef.current.get(uid) || {};
+          
           if (mediaType === 'video') {
-            // Prefer high stream for clarity during screen share; disable fallback to avoid resolution switches
-            try { await client.setStreamFallbackOption?.(user, 0); } catch (_) {}
-            remoteUsersRef.current.set(uid, { ...prev, videoTrack: user.videoTrack, audioTrack: user.audioTrack });
+            try { 
+              await client.setStreamFallbackOption?.(user, 0);
+              console.log(`Set stream fallback for user ${uid}`);
+            } catch (e) { 
+              console.warn('Failed to set stream fallback:', e);
+            }
+            
+            remoteUsersRef.current.set(uid, { 
+              ...prev, 
+              videoTrack: user.videoTrack, 
+              audioTrack: user.audioTrack 
+            });
+            
             const div = ensureRemoteContainer(uid);
-            if (div) playInto(user.videoTrack, div);
+            if (div && user.videoTrack) {
+              console.log(`Playing video for user ${uid}`);
+              playInto(user.videoTrack, div);
+            }
           }
+          
           if (mediaType === 'audio') {
-            try { user.audioTrack?.play(); } catch (_) {}
+            console.log(`Playing audio for user ${uid}`);
+            try { 
+              if (user.audioTrack) {
+                // Create a dedicated audio container if it doesn't exist
+                let audioContainer = document.getElementById(`audio-${uid}`);
+                if (!audioContainer) {
+                  audioContainer = document.createElement('div');
+                  audioContainer.id = `audio-${uid}`;
+                  audioContainer.style.display = 'none';
+                  document.body.appendChild(audioContainer);
+                }
+                await user.audioTrack.play();
+                console.log(`Audio track playing for user ${uid}`);
+              }
+            } catch (e) {
+              console.error(`Failed to play audio for user ${uid}:`, e);
+              // Retry playing audio after a short delay
+              setTimeout(() => {
+                try {
+                  user.audioTrack?.play().catch(console.error);
+                } catch (retryError) {
+                  console.error('Retry play failed:', retryError);
+                }
+              }, 1000);
+            }
             remoteUsersRef.current.set(uid, { ...prev, audioTrack: user.audioTrack });
           }
         });
@@ -266,19 +376,41 @@ const CallStudio = () => {
         // Add event listener for call_ended
         window.addEventListener('call_ended', handleCallEnded);
         
-        // Clean up event listener
+        // Add audio level indicator
+        try {
+          await client.enableAudioVolumeIndicator();
+          client.on('volume-indicator', (volumes) => {
+            volumes.forEach(({uid, level}) => {
+              if (level > 1) {
+                console.log(`Audio level for ${uid}: ${level}`);
+              }
+            });
+          });
+        } catch (e) {
+          console.warn('Failed to enable audio volume indicator:', e);
+        }
+        
+        // Clean up event listeners
         return () => {
           window.removeEventListener('call_ended', handleCallEnded);
+          // Clean up any audio containers we created
+          remoteUsersRef.current.forEach((_, uid) => {
+            const audioEl = document.getElementById(`audio-${uid}`);
+            if (audioEl && audioEl.parentNode) {
+              audioEl.parentNode.removeChild(audioEl);
+            }
+          });
         };
 
-        // Use the same UID/account the backend signed into the token.
-        const joinUid = uidFromServer || String(user?.id || user?._id || '');
+        // Optimized join process
+        const joinUid = uidFromServer;
         const tryJoin = async () => {
-          setJoinStatus('Joining...');
+          setJoinStatus('Joining call...');
+          
           const joinWithRetry = async (client, appId, channelName, token, uid) => {
             let retryCount = 0;
-            const maxRetries = 5;
-            const baseDelay = 1000; // 1 second initial delay
+            const maxRetries = 3; // Reduced from 5 to 3 for faster failure
+            const baseDelay = 500; // Reduced initial delay to 500ms
             
             // Pre-warm the connection
             try {
@@ -289,31 +421,40 @@ const CallStudio = () => {
 
             while (retryCount < maxRetries) {
               try {
-                // Optimize join options
+                // Optimized join options for faster connection
                 const joinOptions = {
                   token,
                   uid: uid || null,
-                  // Enable auto-fallback to TCP if UDP fails
-                  fallback: 2, // 0: disable fallback, 1: auto fallback to TCP, 2: auto fallback to TCP with proxy
-                  // Enable auto network recovery
+                  // Use faster connection settings
+                  fallback: 1, // Simpler fallback mechanism
                   autoReconnect: true,
-                  // Set connection timeout (ms)
-                  timeout: 10000,
-                  // Enable audio quality optimization
-                  audioQuality: 'high',
-                  // Enable video quality optimization
-                  videoQuality: 'high',
-                  // Enable transport fallback
-                  transportFallback: 2, // 0: disable, 1: enable fallback to TCP, 2: enable fallback to TCP with proxy
-                  // Enable audio preprocessing
+                  timeout: 5000, // Shorter timeout for faster failure
+                  // Optimize for speed over quality during connection
+                  audioQuality: 'standard',
+                  videoQuality: 'standard',
+                  // Use TCP for more reliable initial connection
+                  transportFallback: 1,
+                  // Reduce connection handshake time
+                  iceTransportPolicy: 'all',
+                  // Disable some features for faster connection
                   audioPreprocessing: {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true,
-                    highPassFilter: true,
-                    typingNoiseDetection: true,
-                    voiceActivityDetection: true
-                  }
+                    highPassFilter: false, // Disable for faster connection
+                    typingNoiseDetection: false,
+                    voiceActivityDetection: false
+                  },
+                  // Optimize ICE servers
+                  iceServers: [
+                    {
+                      urls: [
+                        'stun:stun.l.google.com:19302',
+                        'stun:stun1.l.google.com:19302',
+                        'stun:stun2.l.google.com:19302'
+                      ]
+                    }
+                  ]
                 };
                 
                 await client.join(appId, channelName, token, uid, joinOptions);
@@ -397,26 +538,99 @@ const CallStudio = () => {
         }
         if (!joined) throw new Error('Unable to join call. Please try again.');
 
-        // Create local tracks (low-latency camera)
+        // Create local tracks in parallel for faster initialization
+        setJoinStatus('Initializing devices...');
         let mic = null, cam = null;
-        try { mic = await AgoraRTC.createMicrophoneAudioTrack(); } catch (_) {}
+        
         try {
-          cam = await AgoraRTC.createCameraVideoTrack({
-            optimizationMode: 'motion',
-            encoderConfig: { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 }
-          });
-        } catch (err) {
-          const msg = String(err?.message || err || '');
-          setCameraPrompt({ show: true, lastError: msg });
+          // Create audio and video tracks in parallel
+          const [micTrack, camTrack] = await Promise.allSettled([
+            // Audio track with optimized settings
+            (async () => {
+              try {
+                const track = await AgoraRTC.createMicrophoneAudioTrack({
+                  AEC: true,
+                  AGC: true,
+                  ANS: true,
+                  encoderConfig: 'speech_standard'
+                });
+                console.log('Microphone track created');
+                return track;
+              } catch (error) {
+                console.error('Error creating microphone track:', error);
+                toast.error('Could not access microphone. Please check permissions.');
+                setMuted(true);
+                return null;
+              }
+            })(),
+            
+            // Video track with optimized settings
+            (async () => {
+              try {
+                const track = await AgoraRTC.createCameraVideoTrack({
+                  optimizationMode: 'motion',
+                  encoderConfig: { 
+                    width: 640, 
+                    height: 360, 
+                    frameRate: 15, // Reduced frame rate for faster connection
+                    bitrateMin: 300, // Reduced bitrate for faster connection
+                    bitrateMax: 800
+                  }
+                });
+                console.log('Camera track created');
+                return track;
+              } catch (err) {
+                const msg = String(err?.message || err || '');
+                console.error('Error creating camera track:', msg);
+                setCameraPrompt({ show: true, lastError: msg });
+                return null;
+              }
+            })()
+          ]);
+          
+          mic = micTrack.status === 'fulfilled' ? micTrack.value : null;
+          cam = camTrack.status === 'fulfilled' ? camTrack.value : null;
+          
+          if (!muted && mic) {
+            setMuted(false);
+          }
+          
+        } catch (error) {
+          console.error('Error initializing media devices:', error);
+          toast.error('Failed to initialize media devices');
         }
+        // Publish tracks in parallel for faster connection
         localTracks.current = { audio: mic, video: cam };
-        const toPub = [];
-        if (mic) toPub.push(mic);
-        if (cam) toPub.push(cam);
-        if (toPub.length) { try { await client.publish(toPub); } catch (_) {} }
-        if (cam && localRef.current) playInto(cam, localRef.current);
+        const publishPromises = [];
+        
+        if (mic) {
+          publishPromises.push(
+            client.publish(mic).catch(e => 
+              console.error('Failed to publish audio:', e)
+            )
+          );
+        }
+        
+        if (cam) {
+          publishPromises.push(
+            client.publish(cam).catch(e => 
+              console.error('Failed to publish video:', e)
+            )
+          );
+          
+          // Show local video immediately without waiting for publish to complete
+          if (localRef.current) {
+            playInto(cam, localRef.current);
+          }
+        }
+        
+        // Wait for all publish operations to complete
+        await Promise.allSettled(publishPromises);
+        
+        // Update UI
         setConnecting(false);
         hasJoinedRef.current = true;
+        setJoinStatus('Connected');
 
         // Periodic re-subscribe to mitigate drift
         const driftTimer = setInterval(async () => {
@@ -453,6 +667,30 @@ const CallStudio = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId]);
 
+  // Check microphone permissions when component mounts
+  useEffect(() => {
+    const checkMicrophonePermission = async () => {
+      try {
+        console.log('Checking microphone permissions...');
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach(track => {
+          track.stop();
+          track.enabled = false;
+        });
+        console.log('Microphone permission granted');
+        setMuted(false);
+      } catch (error) {
+        console.error('Microphone permission denied:', error);
+        toast.error('Microphone access is required for audio calls');
+        setMuted(true);
+      }
+    };
+    
+    checkMicrophonePermission();
+  }, []);
+  
+  // Load students for invite
   useEffect(() => {
     if (!showInvite) return;
     (async () => {
@@ -479,8 +717,51 @@ const CallStudio = () => {
   };
 
   const toggleMute = async () => {
-    const t = localTracks.current.audio; if (!t) return;
-    const next = !muted; await t.setEnabled(!next); setMuted(next);
+    try {
+      let t = localTracks.current.audio;
+      
+      if (!t) {
+        // Try to create audio track if it doesn't exist
+        try {
+          console.log('Creating new audio track...');
+          const newAudio = await AgoraRTC.createMicrophoneAudioTrack({
+            AEC: true,
+            AGC: true,
+            ANS: true,
+            encoderConfig: 'speech_standard'
+          });
+          
+          localTracks.current.audio = newAudio;
+          await clientRef.current?.publish([newAudio]);
+          setMuted(false);
+          toast.success('Microphone enabled');
+          return;
+        } catch (e) {
+          console.error('Error creating audio track:', e);
+          toast.error('Could not access microphone');
+          setMuted(true);
+          return;
+        }
+      }
+      
+      const nextMuted = !muted;
+      console.log(`Toggling mute to: ${nextMuted}`);
+      
+      if (nextMuted) {
+        // When muting, just disable the track but keep it in the call
+        await t.setEnabled(false);
+      } else {
+        // When unmuting, re-enable the track
+        await t.setEnabled(true);
+      }
+      
+      setMuted(nextMuted);
+      toast.success(nextMuted ? 'Microphone muted' : 'Microphone unmuted');
+      
+    } catch (error) {
+      console.error('Error in toggleMute:', error);
+      toast.error('Failed to toggle microphone');
+    }
   };
   const toggleVideo = async () => {
     const t = localTracks.current.video; if (!t) return;
