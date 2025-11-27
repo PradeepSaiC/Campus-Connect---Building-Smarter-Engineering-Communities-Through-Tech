@@ -10,7 +10,19 @@ const useChatStore = create((set, get) => ({
   unreadCounts: {},
 
   // Actions
-  setChats: (chats) => set({ chats }),
+  setChats: (chats) => {
+    // Update chats and also update currentChat if it exists
+    const { currentChat } = get();
+    let updatedCurrentChat = currentChat;
+    if (currentChat) {
+      const updatedChat = chats.find(c => c._id === currentChat._id);
+      if (updatedChat) {
+        updatedCurrentChat = updatedChat;
+        set({ currentChat: updatedCurrentChat });
+      }
+    }
+    set({ chats });
+  },
   
   addChat: (chat) => {
     const { chats } = get();
@@ -22,7 +34,27 @@ const useChatStore = create((set, get) => ({
   
   setCurrentChat: (chat) => set({ currentChat: chat }),
   
-  setMessages: (messages) => set({ messages }),
+  setMessages: (messages) => {
+    // Update messages and ensure sender photoURL is included
+    const updatedMessages = messages.map(msg => {
+      // If message sender doesn't have photoURL but we have it in chats, use it
+      if (msg.sender && !msg.sender.photoURL) {
+        const { chats } = get();
+        const chat = chats.find(c => c._id === msg.chatId);
+        if (chat && Array.isArray(chat.participants)) {
+          const participant = chat.participants.find(p => p._id === msg.sender._id);
+          if (participant && participant.photoURL) {
+            return {
+              ...msg,
+              sender: { ...msg.sender, photoURL: participant.photoURL }
+            };
+          }
+        }
+      }
+      return msg;
+    });
+    set({ messages: updatedMessages });
+  },
   
   addMessage: (message) => {
     const { messages, currentChat } = get();

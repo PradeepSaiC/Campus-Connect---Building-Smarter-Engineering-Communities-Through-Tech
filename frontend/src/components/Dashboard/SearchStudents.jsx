@@ -1,31 +1,14 @@
 import { useState, useEffect } from 'react';
 import useAuthStore from '../../store/authStore.js';
 
-import { studentAPI, chatAPI, chatRequestAPI } from '../../services/api.js';
+import { studentAPI, chatAPI, chatRequestAPI, interestsAPI } from '../../services/api.js';
 import { toast } from 'react-hot-toast';
 import { Search, Users, MessageCircle, GraduationCap, Building } from 'lucide-react';
 import SendRequestModal from '../Requests/SendRequestModal.jsx';
 
-const INTERESTS = [
-  'Artificial Intelligence',
-  'Machine Learning',
-  'Data Science',
-  'Web Development',
-  'Mobile Development',
-  'Cybersecurity',
-  'Cloud Computing',
-  'DevOps',
-  'Blockchain',
-  'IoT',
-  'Robotics',
-  'Game Development',
-  'UI/UX Design',
-  'Digital Marketing',
-  'Business Analytics'
-];
-
 const SearchStudents = () => {
   const { user } = useAuthStore();
+  const [interests, setInterests] = useState([]);
   const [selectedInterests, setSelectedInterests] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -35,6 +18,37 @@ const SearchStudents = () => {
   const [onlyOtherColleges, setOnlyOtherColleges] = useState(false);
   const [chatPartnerIds, setChatPartnerIds] = useState(new Set());
   const [pendingPartnerIds, setPendingPartnerIds] = useState(new Set());
+
+  // Fetch all interests (including custom ones)
+  useEffect(() => {
+    const fetchInterests = async () => {
+      try {
+        const response = await interestsAPI.getAll();
+        setInterests(response.data?.interests || []);
+      } catch (error) {
+        console.error('Error fetching interests:', error);
+        // Fallback to default interests
+        setInterests([
+          'Artificial Intelligence',
+          'Machine Learning',
+          'Data Science',
+          'Web Development',
+          'Mobile Development',
+          'Cybersecurity',
+          'Cloud Computing',
+          'DevOps',
+          'Blockchain',
+          'IoT',
+          'Robotics',
+          'Game Development',
+          'UI/UX Design',
+          'Digital Marketing',
+          'Business Analytics'
+        ]);
+      }
+    };
+    fetchInterests();
+  }, []);
 
   const handleInterestToggle = (interest) => {
     setSelectedInterests(prev => (prev.includes(interest) ? [] : [interest]));
@@ -185,7 +199,7 @@ const SearchStudents = () => {
               <option value="" disabled>
                 Select interest
               </option>
-              {INTERESTS.map((it) => (
+              {interests.map((it) => (
                 <option key={it} value={it}>
                   {it}
                 </option>

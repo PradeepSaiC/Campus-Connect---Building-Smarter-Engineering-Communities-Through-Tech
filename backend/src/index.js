@@ -135,6 +135,38 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Public file upload to Cloudinary (images only) - for registration
+app.post('/api/upload-public', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+    const mime = req.file.mimetype || '';
+    if (!mime.startsWith('image/')) {
+      return res.status(400).json({ message: 'Only image uploads are allowed' });
+    }
+    // Limit file size for public uploads (5MB)
+    if (req.file.size > 5 * 1024 * 1024) {
+      return res.status(400).json({ message: 'File size must be less than 5MB' });
+    }
+    // Upload buffer to Cloudinary via stream
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'campusconnect', resource_type: 'image' },
+        (error, uploadResult) => {
+          if (error) return reject(error);
+          resolve(uploadResult);
+        }
+      );
+      stream.end(req.file.buffer);
+    });
+    return res.json({ url: result.secure_url, publicId: result.public_id });
+  } catch (error) {
+    console.error('Upload error:', error);
+    return res.status(500).json({ message: 'Upload failed' });
+  }
+});
+
 // Authenticated file upload to Cloudinary (images only)
 app.post('/api/upload', authenticateToken, upload.single('file'), async (req, res) => {
   try {
@@ -177,6 +209,23 @@ app.put('/api/student/profile', authenticateToken, async (req, res) => {
     if (Array.isArray(interests)) student.interests = interests;
     if (typeof photoURL === 'string') student.photoURL = photoURL;
     await student.save();
+    
+    // Broadcast profile update via socket
+    try {
+      io.emit('user_profile_updated', {
+        userId: student._id.toString(),
+        photoURL: student.photoURL,
+        name: student.name
+      });
+      // Also emit to user-specific room
+      io.to(`user_${student._id}`).emit('profile_updated', {
+        photoURL: student.photoURL,
+        name: student.name
+      });
+    } catch (socketError) {
+      console.warn('Socket broadcast error:', socketError);
+    }
+    
     return res.json({
       message: 'Profile updated successfully',
       student: {
@@ -551,7 +600,7 @@ io.on('connection', (socket) => {
 // College Registration
 app.post('/api/college/register', async (req, res) => {
   try {
-    const { collegeName, adminName, adminEmail, password, collegeAddress, collegeType, collegeVision } = req.body;
+    const { collegeName, adminName, adminEmail, password, collegeAddress, collegeType, collegeVision, collegeLogo } = req.body;
 
     // Check if college already exists
     const existingCollege = await College.findOne({ adminEmail });
@@ -571,6 +620,7 @@ app.post('/api/college/register', async (req, res) => {
       collegeAddress,
       collegeType,
       collegeVision,
+      collegeLogo: collegeLogo || '',
       isVerified: false,
       totalStudents: 0
     });
@@ -622,6 +672,7 @@ app.post('/api/college/login', async (req, res) => {
         collegeAddress: college.collegeAddress,
         collegeType: college.collegeType,
         collegeVision: college.collegeVision,
+        collegeLogo: college.collegeLogo || '',
         isVerified: college.isVerified,
         totalStudents: college.totalStudents
       },
@@ -724,7 +775,7 @@ app.post('/api/auth/first-login', async (req, res) => {
 // Verify OTP and Complete Registration
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
-    const { usn, otp, password, interests, skills } = req.body;
+    const { usn, otp, password, interests, skills, photoURL } = req.body;
 
     // Find student with populated college and department
     const student = await Student.findOne({ usn }).populate('college department');
@@ -749,6 +800,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     student.password = hashedPassword;
     student.interests = interests || [];
     student.skills = skills || [];
+    if (photoURL) student.photoURL = photoURL;
     student.isRegistered = true;
     student.isFirstLogin = false;
     student.otp = null;
@@ -774,6 +826,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         name: student.name,
         email: student.email,
         usn: student.usn,
+        photoURL: student.photoURL || '',
         department: student.department ? {
           id: student.department._id,
           name: student.department.name
@@ -827,6 +880,7 @@ app.post('/api/auth/login', async (req, res) => {
         name: student.name,
         email: student.email,
         usn: student.usn,
+        photoURL: student.photoURL || '',
         department: student.department ? {
           id: student.department._id,
           name: student.department.name
@@ -929,6 +983,17 @@ app.put('/api/college/profile', authenticateToken, async (req, res) => {
     college.collegeLogo = collegeLogo || '';
     
     await college.save();
+    
+    // Broadcast profile update via socket
+    try {
+      io.emit('college_profile_updated', {
+        collegeId: college._id.toString(),
+        collegeLogo: college.collegeLogo,
+        collegeName: college.collegeName
+      });
+    } catch (socketError) {
+      console.warn('Socket broadcast error:', socketError);
+    }
 
     res.json({ 
       message: 'Profile updated successfully', 
@@ -1628,6 +1693,7 @@ app.get('/api/college/students/:id', authenticateToken, async (req, res) => {
         usn: student.usn,
         name: student.name,
         email: student.email,
+        photoURL: student.photoURL || '',
         phone: student.phone,
         address: student.address,
         department: student.department,
@@ -1781,6 +1847,58 @@ app.delete('/api/college/students/:id', authenticateToken, async (req, res) => {
 });
 
 // Search students by interests
+// Get all unique interests (for dropdowns)
+app.get('/api/interests', async (req, res) => {
+  try {
+    // Get all unique interests from students
+    const students = await Student.find({ isRegistered: true }).select('interests');
+    const allInterests = new Set();
+    
+    // Add fixed interests
+    const fixedInterests = [
+      'Artificial Intelligence',
+      'Machine Learning',
+      'Data Science',
+      'Web Development',
+      'Mobile Development',
+      'Cybersecurity',
+      'Cloud Computing',
+      'DevOps',
+      'Blockchain',
+      'IoT',
+      'Robotics',
+      'Game Development',
+      'UI/UX Design',
+      'Digital Marketing',
+      'Business Analytics',
+      'Finance',
+      'Marketing',
+      'Human Resources',
+      'Operations',
+      'Research'
+    ];
+    fixedInterests.forEach(interest => allInterests.add(interest));
+    
+    // Add custom interests from students
+    students.forEach(student => {
+      if (Array.isArray(student.interests)) {
+        student.interests.forEach(interest => {
+          if (interest && typeof interest === 'string') {
+            allInterests.add(interest.trim());
+          }
+        });
+      }
+    });
+    
+    // Convert to sorted array
+    const interestsArray = Array.from(allInterests).sort();
+    res.json({ interests: interestsArray });
+  } catch (error) {
+    console.error('Get interests error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 app.get('/api/students/search', async (req, res) => {
   try {
     const { interests, limit = 20 } = req.query;
@@ -1853,8 +1971,34 @@ app.post('/api/chat-requests', authenticateToken, async (req, res) => {
 
     await chatRequest.save();
 
-    // Populate sender info for response
-    await chatRequest.populate('sender', 'name usn');
+    // Populate sender/receiver info for response
+    await chatRequest.populate('sender', 'name usn photoURL');
+    await chatRequest.populate('receiver', 'name usn photoURL');
+
+    const payload = {
+      id: chatRequest._id,
+      status: chatRequest.status,
+      message: chatRequest.message,
+      sender: {
+        _id: chatRequest.sender?._id,
+        name: chatRequest.sender?.name,
+        usn: chatRequest.sender?.usn,
+        photoURL: chatRequest.sender?.photoURL
+      },
+      receiver: {
+        _id: chatRequest.receiver?._id,
+        name: chatRequest.receiver?.name,
+        usn: chatRequest.receiver?.usn,
+        photoURL: chatRequest.receiver?.photoURL
+      }
+    };
+
+    try {
+      io.to(`user_${receiverId}`).emit('chat_request_created', payload);
+      io.to(`user_${req.user.id}`).emit('chat_request_created', payload);
+    } catch (emitError) {
+      console.warn('chat_request_created emit failed:', emitError?.message || emitError);
+    }
 
     res.status(201).json(chatRequest);
   } catch (error) {
@@ -1919,19 +2063,65 @@ app.put('/api/chat-requests/:id', authenticateToken, async (req, res) => {
 
       await chat.save();
 
-      res.json({ 
+      const responsePayload = { 
         message: 'Chat request accepted',
         chat: chat,
         request: chatRequest
-      });
+      };
+
+      const payload = {
+        id: chatRequest._id,
+        status: chatRequest.status,
+        sender: {
+          _id: chatRequest.sender?._id,
+          name: chatRequest.sender?.name,
+          usn: chatRequest.sender?.usn
+        },
+        receiver: {
+          _id: chatRequest.receiver?._id,
+          name: chatRequest.receiver?.name,
+          usn: chatRequest.receiver?.usn
+        }
+      };
+      try {
+        io.to(`user_${chatRequest.sender._id.toString()}`).emit('chat_request_updated', payload);
+        io.to(`user_${chatRequest.receiver._id.toString()}`).emit('chat_request_updated', payload);
+      } catch (emitError) {
+        console.warn('chat_request_updated emit failed:', emitError?.message || emitError);
+      }
+
+      res.json(responsePayload);
     } else if (action === 'reject') {
       chatRequest.status = 'rejected';
       await chatRequest.save();
 
-      res.json({ 
+      const responsePayload = { 
         message: 'Chat request rejected',
         request: chatRequest
-      });
+      };
+
+      const payload = {
+        id: chatRequest._id,
+        status: chatRequest.status,
+        sender: {
+          _id: chatRequest.sender?._id,
+          name: chatRequest.sender?.name,
+          usn: chatRequest.sender?.usn
+        },
+        receiver: {
+          _id: chatRequest.receiver?._id,
+          name: chatRequest.receiver?.name,
+          usn: chatRequest.receiver?.usn
+        }
+      };
+      try {
+        io.to(`user_${chatRequest.sender._id.toString()}`).emit('chat_request_updated', payload);
+        io.to(`user_${chatRequest.receiver._id.toString()}`).emit('chat_request_updated', payload);
+      } catch (emitError) {
+        console.warn('chat_request_updated emit failed:', emitError?.message || emitError);
+      }
+
+      res.json(responsePayload);
     } else {
       res.status(400).json({ message: 'Invalid action' });
     }
@@ -1985,7 +2175,7 @@ app.post('/api/chats', authenticateToken, async (req, res) => {
 app.get('/api/chats', authenticateToken, async (req, res) => {
   try {
     const chats = await Chat.find({ participants: req.user.id })
-      .populate('participants', 'name email usn')
+      .populate('participants', 'name email usn photoURL')
       .sort({ lastMessageTime: -1 });
     res.json(chats);
   } catch (error) {
@@ -2675,8 +2865,34 @@ app.post('/api/video-call-requests', authenticateToken, async (req, res) => {
 
     await videoCallRequest.save();
 
-    // Populate sender info for response
-    await videoCallRequest.populate('sender', 'name usn');
+    // Populate sender/receiver info for response
+    await videoCallRequest.populate('sender', 'name usn photoURL');
+    await videoCallRequest.populate('receiver', 'name usn photoURL');
+
+    const payload = {
+      id: videoCallRequest._id,
+      status: videoCallRequest.status,
+      message: videoCallRequest.message,
+      sender: {
+        _id: videoCallRequest.sender?._id,
+        name: videoCallRequest.sender?.name,
+        usn: videoCallRequest.sender?.usn,
+        photoURL: videoCallRequest.sender?.photoURL
+      },
+      receiver: {
+        _id: videoCallRequest.receiver?._id,
+        name: videoCallRequest.receiver?.name,
+        usn: videoCallRequest.receiver?.usn,
+        photoURL: videoCallRequest.receiver?.photoURL
+      }
+    };
+
+    try {
+      io.to(`user_${receiverId}`).emit('video_request_created', payload);
+      io.to(`user_${req.user.id}`).emit('video_request_created', payload);
+    } catch (emitError) {
+      console.warn('video_request_created emit failed:', emitError?.message || emitError);
+    }
 
     res.status(201).json(videoCallRequest);
   } catch (error) {
@@ -2728,6 +2944,29 @@ app.put('/api/video-call-requests/:id', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Request has already been processed' });
     }
 
+    const emitVideoRequestUpdate = () => {
+      const payload = {
+        id: videoCallRequest._id,
+        status: videoCallRequest.status,
+        sender: {
+          _id: videoCallRequest.sender?._id,
+          name: videoCallRequest.sender?.name,
+          usn: videoCallRequest.sender?.usn
+        },
+        receiver: {
+          _id: videoCallRequest.receiver?._id,
+          name: videoCallRequest.receiver?.name,
+          usn: videoCallRequest.receiver?.usn
+        }
+      };
+      try {
+        io.to(`user_${videoCallRequest.sender._id.toString()}`).emit('video_request_updated', payload);
+        io.to(`user_${videoCallRequest.receiver._id.toString()}`).emit('video_request_updated', payload);
+      } catch (emitError) {
+        console.warn('video_request_updated emit failed:', emitError?.message || emitError);
+      }
+    };
+
     if (action === 'accept') {
       videoCallRequest.status = 'accepted';
       await videoCallRequest.save();
@@ -2751,19 +2990,23 @@ app.put('/api/video-call-requests/:id', authenticateToken, async (req, res) => {
         channelName
       });
 
-      res.json({ 
+      const responsePayload = { 
         message: 'Video call request accepted',
         videoCall: videoCall,
         request: videoCallRequest
-      });
+      };
+      emitVideoRequestUpdate();
+      res.json(responsePayload);
     } else if (action === 'reject') {
       videoCallRequest.status = 'rejected';
       await videoCallRequest.save();
 
-      res.json({ 
+      const responsePayload = { 
         message: 'Video call request rejected',
         request: videoCallRequest
-      });
+      };
+      emitVideoRequestUpdate();
+      res.json(responsePayload);
     } else {
       res.status(400).json({ message: 'Invalid action' });
     }

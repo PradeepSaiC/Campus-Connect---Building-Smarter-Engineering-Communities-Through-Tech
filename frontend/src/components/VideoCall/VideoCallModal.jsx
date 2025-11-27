@@ -28,6 +28,21 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   });
 
   const localVideoRef = useRef(null);
+  const playRemoteAudio = async (track) => {
+    if (!track) return;
+    try { await track.setEnabled(true); } catch (_) {}
+    try { await track.setVolume?.(100); } catch (_) {}
+    try {
+      await track.play();
+    } catch (err) {
+      console.warn('Audio autoplay blocked', err);
+      const resume = () => {
+        try { track.play(); } catch (_) {}
+        window.removeEventListener('click', resume);
+      };
+      window.addEventListener('click', resume, { once: true });
+    }
+  };
   const remoteVideoRef = useRef(null);
   const clientRef = useRef(null);
   const localTracksRef = useRef({ audio: null, video: null });
@@ -35,6 +50,22 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const resubTimerRef = useRef(null);
   const republishTimerRef = useRef(null);
   const replaceTimerRef = useRef(null);
+  const audioHealthTimerRef = useRef(null);
+  const prewarmRequestedRef = useRef(false);
+
+  useEffect(() => {
+    if (isOpen && !prewarmRequestedRef.current) {
+      prewarmRequestedRef.current = true;
+      (async () => {
+        try {
+          if (navigator?.mediaDevices?.getUserMedia) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach((t) => t.stop());
+          }
+        } catch (_) {}
+      })();
+    }
+  }, [isOpen]);
 
   const preflightAndCreateTracks = async () => {
     const client = clientRef.current;
@@ -42,7 +73,21 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     // First attempt
     let micTrack = null;
     let camTrack = null;
-    try { micTrack = await AgoraRTC.createMicrophoneAudioTrack(); } catch (_) {}
+    try { 
+      micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+        AEC: true,
+        ANS: true,
+        AGC: true,
+        encoderConfig: 'music_standard'
+      });
+      if (micTrack) {
+        try { await micTrack.setEnabled(true); } catch (_) {}
+        try { await micTrack.setVolume?.(100); } catch (_) {}
+        console.log('Microphone track ready with audio enhancements');
+      }
+    } catch (e) {
+      console.warn('Failed to create microphone track:', e);
+    }
     // Low-latency camera config (240p@24fps motion)
     const cfg = { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 };
     try { camTrack = await AgoraRTC.createCameraVideoTrack({
@@ -67,7 +112,18 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
         // Immediately stop the preflight stream tracks; Agora will create its own tracks
         stream.getTracks().forEach(t => t.stop());
-        try { micTrack = await AgoraRTC.createMicrophoneAudioTrack(); } catch (_) {}
+        try { 
+          micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+            AEC: true,
+            ANS: true,
+            AGC: true,
+            encoderConfig: 'music_standard'
+          });
+          if (micTrack) {
+            try { await micTrack.setEnabled(true); } catch (_) {}
+            try { await micTrack.setVolume?.(100); } catch (_) {}
+          }
+        } catch (_) {}
         try { camTrack = await AgoraRTC.createCameraVideoTrack({ encoderConfig: cfg, cameraId: selectedCameraId || undefined, optimizationMode: 'motion' }); } catch (e2) {
           try {
             const cams = await AgoraRTC.getCameras();
@@ -86,13 +142,46 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     localTracksRef.current = { audio: micTrack, video: camTrack };
     setLocalStream({ audioTrack: micTrack || null, videoTrack: camTrack || null });
     const toPublish = [];
-    if (micTrack) toPublish.push(micTrack);
-    if (camTrack) toPublish.push(camTrack);
-    if (toPublish.length > 0) {
-      await client.publish(toPublish);
+    if (micTrack) {
+      // Ensure audio is enabled before publishing
+      try {
+        await micTrack.setEnabled(true);
+        toPublish.push(micTrack);
+        console.log('Publishing audio track');
+      } catch (e) {
+        console.error('Failed to enable audio track:', e);
+      }
     }
     if (camTrack) {
       try { await camTrack.setEnabled(true); } catch (_) {}
+      toPublish.push(camTrack);
+    }
+    if (toPublish.length > 0) {
+      try {
+        await client.publish(toPublish);
+        console.log('Published tracks:', toPublish.length);
+      } catch (e) {
+        console.error('Failed to publish tracks:', e);
+      }
+    }
+    if (micTrack && typeof micTrack.getAudioLevel === 'function') {
+      try {
+        if (audioHealthTimerRef.current) clearInterval(audioHealthTimerRef.current);
+      } catch (_) {}
+      audioHealthTimerRef.current = setInterval(() => {
+        const currentMic = localTracksRef.current.audio;
+        if (!currentMic || typeof currentMic.getAudioLevel !== 'function') {
+          try { clearInterval(audioHealthTimerRef.current); } catch (_) {}
+          audioHealthTimerRef.current = null;
+          return;
+        }
+        try {
+          const level = currentMic.getAudioLevel();
+          if (typeof level === 'number' && level < 0.0005) {
+            currentMic.setEnabled(false).then(() => currentMic.setEnabled(true)).catch(() => {});
+          }
+        } catch (_) {}
+      }, 7000);
     }
     if (camTrack && localVideoRef.current) {
       camTrack.play(localVideoRef.current, { mirror: false });
@@ -205,18 +294,22 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
           if (mediaType === 'audio') {
             try {
               if (user.audioTrack) {
-                console.log('Audio track state before play:', {
-                  enabled: user.audioTrack.isPlaying,
-                  muted: user.audioTrack.isMuted
-                });
-                await user.audioTrack.setEnabled(true);
-                await user.audioTrack.play();
+                await playRemoteAudio(user.audioTrack);
                 console.log('Successfully playing audio track for user:', user.uid);
               } else {
                 console.warn('No audio track found for user:', user.uid);
               }
             } catch (e) {
               console.error('Error playing audio track:', e);
+              setTimeout(async () => {
+                try {
+                  if (user.audioTrack) {
+                    await playRemoteAudio(user.audioTrack);
+                  }
+                } catch (retryError) {
+                  console.error('Retry audio play failed:', retryError);
+                }
+              }, 500);
             }
           }
           
@@ -272,9 +365,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                     ru.videoTrack?.play(remoteVideoRef.current, { mirror: false });
                   }
                 }
-                if (ru.hasAudio) {
+                if (ru.hasAudio && ru.audioTrack) {
                   await c.subscribe(ru, 'audio');
-                  ru.audioTrack?.play();
+                  try {
+                    await playRemoteAudio(ru.audioTrack);
+                  } catch (e) {
+                    console.error('Error playing remote audio on reconnect:', e);
+                  }
                 }
               } catch (_) {}
             }
@@ -282,9 +379,25 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         } catch (_) {}
       });
 
-      // Join channel
+      // Join channel with optimized options
       const uid = String(user?.id || user?._id);
-      await client.join(appId, callData.channelName, callData.token, uid);
+      try {
+        await client.setClientRole?.('host');
+      } catch (_) {}
+      try {
+        await client.enableAudioVolumeIndicator?.();
+      } catch (_) {}
+      try {
+        await client.join(appId, callData.channelName, callData.token || null, uid || null);
+      } catch (joinError) {
+        console.error('Join error:', joinError);
+        // Retry join once
+        try {
+            await client.join(appId, callData.channelName, callData.token || null, uid || null);
+        } catch (retryError) {
+          throw retryError;
+        }
+      }
 
       // Automatically attempt to create/publish tracks (with permission preflight fallback)
       await preflightAndCreateTracks();
@@ -349,7 +462,15 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
           }
           if (ru.hasAudio) {
             await client.subscribe(ru, 'audio');
-            ru.audioTrack?.play();
+            try {
+              await ru.audioTrack?.setEnabled(true);
+              await ru.audioTrack?.play();
+              try {
+                await ru.audioTrack?.setVolume(100);
+              } catch (_) {}
+            } catch (e) {
+              console.error('Error playing remote audio:', e);
+            }
           }
         } catch (e) {
           // keep UI running; errors will be visible in console
@@ -376,9 +497,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                 u.videoTrack?.play(remoteVideoRef.current);
               }
             }
-            if (u.hasAudio) {
+            if (u.hasAudio && u.audioTrack) {
               await client.subscribe(u, 'audio');
-              u.audioTrack?.play();
+              try {
+                await playRemoteAudio(u.audioTrack);
+              } catch (e) {
+                console.error('Error playing audio in retry:', e);
+              }
             }
           }
         } catch (_) {}
@@ -418,6 +543,10 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         clearTimeout(replaceTimerRef.current);
         replaceTimerRef.current = null;
       }
+      if (audioHealthTimerRef.current) {
+        clearInterval(audioHealthTimerRef.current);
+        audioHealthTimerRef.current = null;
+      }
       const client = clientRef.current;
       const { audio, video } = localTracksRef.current;
       if (audio) {
@@ -443,7 +572,11 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
 
   // Auto-join when credentials are present and modal is open
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      // Cleanup when modal closes
+      cleanupCall();
+      return;
+    }
     if (callData?.token && callData?.channelName) {
       joinAndSetup();
     }
@@ -735,8 +868,14 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                 onClick={async () => {
                   const t = localTracksRef.current.audio;
                   if (!t) return;
-                  await t.setEnabled(isMuted);
-                  setIsMuted(!isMuted);
+                  const newMutedState = !isMuted;
+                  try {
+                    await t.setEnabled(!newMutedState); // Enable when not muted, disable when muted
+                    setIsMuted(newMutedState);
+                  } catch (e) {
+                    console.error('Error toggling microphone:', e);
+                    toast.error('Failed to toggle microphone');
+                  }
                 }}
                 className={`w-12 h-12 rounded-full flex items-center justify-center ${
                   isMuted ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -749,8 +888,14 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                 onClick={async () => {
                   const t = localTracksRef.current.video;
                   if (!t) return;
-                  await t.setEnabled(isVideoOff);
-                  setIsVideoOff(!isVideoOff);
+                  const newVideoOffState = !isVideoOff;
+                  try {
+                    await t.setEnabled(!newVideoOffState); // Enable when not off, disable when off
+                    setIsVideoOff(newVideoOffState);
+                  } catch (e) {
+                    console.error('Error toggling video:', e);
+                    toast.error('Failed to toggle video');
+                  }
                 }}
                 className={`w-12 h-12 rounded-full flex items-center justify-center ${
                   isVideoOff ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'

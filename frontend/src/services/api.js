@@ -48,8 +48,8 @@ api.interceptors.response.use(
 export const authAPI = {
   // Student auth
   firstLogin: (usn) => api.post('/auth/first-login', { usn }),
-  verifyOTP: (usn, otp, password, interests, skills) => 
-    api.post('/auth/verify-otp', { usn, otp, password, interests, skills }),
+  verifyOTP: (usn, otp, password, interests, skills, photoURL) => 
+    api.post('/auth/verify-otp', { usn, otp, password, interests, skills, photoURL }),
   login: (usn, password) => api.post('/auth/login', { usn, password }),
   
   // College auth
@@ -157,6 +157,11 @@ export const uploadAPI = {
       },
     });
   },
+};
+
+// Interests API
+export const interestsAPI = {
+  getAll: () => api.get('/interests')
 };
 
 export default api; 

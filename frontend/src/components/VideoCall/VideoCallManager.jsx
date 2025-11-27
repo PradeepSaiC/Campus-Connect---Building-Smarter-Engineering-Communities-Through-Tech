@@ -17,6 +17,12 @@ const VideoCallManager = () => {
   const handlersAttachedRef = useRef(false);
   const ringtoneRef = useRef({ ctx: null, osc: null, gain: null, timer: null });
 
+  useEffect(() => {
+    return () => {
+      stopRingtone();
+    };
+  }, []);
+
   const startRingtone = () => {
     try {
       // Stop any existing ringtone first
@@ -53,7 +59,10 @@ const VideoCallManager = () => {
       
       osc1.start();
       osc2.start();
-      ringtoneRef.current = { ctx, osc1, osc2, gain, timer };
+      const stopTimer = setTimeout(() => {
+        stopRingtone();
+      }, 45000);
+      ringtoneRef.current = { ctx, osc1, osc2, gain, timer, stopTimer };
     } catch (error) {
       console.warn('Could not start ringtone:', error);
     }
@@ -63,13 +72,14 @@ const VideoCallManager = () => {
     const r = ringtoneRef.current;
     try {
       if (r?.timer) clearInterval(r.timer);
+      if (r?.stopTimer) clearTimeout(r.stopTimer);
       if (r?.osc1) r.osc1.stop();
       if (r?.osc2) r.osc2.stop();
       if (r?.ctx) r.ctx.close();
     } catch (error) {
       console.warn('Error stopping ringtone:', error);
     }
-    ringtoneRef.current = { ctx: null, osc1: null, osc2: null, gain: null, timer: null };
+    ringtoneRef.current = { ctx: null, osc1: null, osc2: null, gain: null, timer: null, stopTimer: null };
   };
 
   useEffect(() => {

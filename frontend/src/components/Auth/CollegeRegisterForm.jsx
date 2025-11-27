@@ -11,7 +11,8 @@ import {
   EyeOff, 
   ArrowLeft,
   CheckCircle,
-  XCircle
+  XCircle,
+  Camera
 } from 'lucide-react';
 
 const CollegeRegisterForm = () => {
@@ -24,10 +25,12 @@ const CollegeRegisterForm = () => {
     confirmPassword: '',
     collegeAddress: '',
     collegeType: 'Private',
-    collegeVision: ''
+    collegeVision: '',
+    collegeLogo: ''
   });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   const handleChange = (e) => {
     setFormData({
@@ -59,7 +62,8 @@ const CollegeRegisterForm = () => {
         password: formData.password,
         collegeAddress: formData.collegeAddress,
         collegeType: formData.collegeType,
-        collegeVision: formData.collegeVision
+        collegeVision: formData.collegeVision,
+        collegeLogo: formData.collegeLogo
       };
 
       await authAPI.collegeRegister(collegeData);

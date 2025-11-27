@@ -53,6 +53,21 @@ const LiveStream = () => {
   // Helper: clear container and play track with consistent styles to avoid duplicated renders
   const playIntoContainer = (track) => {
     const container = videoRef.current;
+  const playRemoteAudio = async (track) => {
+    if (!track) return;
+    try { await track.setEnabled(true); } catch (_) {}
+    try { await track.setVolume?.(100); } catch (_) {}
+    try {
+      await track.play();
+    } catch (err) {
+      console.warn('[LIVE:UI] audio autoplay blocked', err);
+      const resume = () => {
+        try { track.play(); } catch (_) {}
+        window.removeEventListener('click', resume);
+      };
+      window.addEventListener('click', resume, { once: true });
+    }
+  };
     if (!container || !track) return;
     try {
       const mt = track.getMediaStreamTrack?.();
@@ -127,7 +142,7 @@ const LiveStream = () => {
           // Host or restricted audience (e.g., webinar)
           ({ data } = await eventAPI.getStreamToken(eventId, role, sessionIdRef.current));
         }
-        const c = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
+        const c = AgoraRTC.createClient({ mode: 'live', codec: 'h264' });
         console.log('[LIVE:UI] Agora client created', { role: isHost ? 'host' : 'audience' });
         setClient(c);
         try { await c.setClientRole?.(isHost ? 'host' : 'audience', !isHost ? { level: 1 } : undefined); } catch (_) {}
@@ -167,8 +182,16 @@ const LiveStream = () => {
             if (remoteActiveUidRef.current && remoteActiveUidRef.current !== uid) {
               return;
             }
-            try { await c.subscribe(user, 'audio'); } catch (_) { return; }
-            user.audioTrack?.play();
+            try { 
+              await c.subscribe(user, 'audio'); 
+              if (user.audioTrack) {
+                await playRemoteAudio(user.audioTrack);
+                console.log('[LIVE:UI] audio track playing for user:', uid);
+              }
+            } catch (e) { 
+              console.error('[LIVE:UI] audio subscribe/play error:', e);
+              return; 
+            }
             setConnecting(false);
             setWaitingHost(false);
             return;
@@ -212,7 +235,22 @@ const LiveStream = () => {
         if (isHost) {
           // Try to create microphone; if permission denied, continue with video-only
           let mic = null;
-          try { mic = await AgoraRTC.createMicrophoneAudioTrack(); } catch (e) { console.warn('[LIVE:UI] mic track create failed', e); mic = null; }
+          try {
+            mic = await AgoraRTC.createMicrophoneAudioTrack({
+              AEC: true,
+              ANS: true,
+              AGC: true,
+              encoderConfig: 'music_standard'
+            });
+            if (mic) {
+              try { await mic.setEnabled(true); } catch (_) {}
+              try { await mic.setVolume?.(120); } catch (_) {}
+              console.log('[LIVE:UI] microphone track created and enabled');
+            }
+          } catch (e) {
+            console.warn('[LIVE:UI] mic track create failed', e);
+            mic = null;
+          }
           // Lower-latency encoder config: 240p @ 24fps, motion optimized
           const cam = await AgoraRTC.createCameraVideoTrack({
             optimizationMode: 'motion',
@@ -227,10 +265,18 @@ const LiveStream = () => {
           });
           if (mic) {
             console.log('[LIVE:UI] publishing mic+cam');
+            // Ensure both tracks are enabled before publishing
+            try {
+              await mic.setEnabled(true);
+              await cam.setEnabled(true);
+            } catch (_) {}
             await c.publish([mic, cam]);
             setLocalTracks({ audio: mic, video: cam });
           } else {
             console.log('[LIVE:UI] publishing cam only');
+            try {
+              await cam.setEnabled(true);
+            } catch (_) {}
             await c.publish([cam]);
             setLocalTracks({ audio: null, video: cam });
             setMuted(true);
@@ -459,7 +505,7 @@ const LiveStream = () => {
       } else {
         ({ data } = await eventAPI.getStreamToken(eventId, role, sessionIdRef.current));
       }
-      const c = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
+      const c = AgoraRTC.createClient({ mode: 'live', codec: 'h264' });
       setClient(c);
       try { await c.setClientRole?.(isHost ? 'host' : 'audience'); } catch (_) {}
       try { await c.enableDualStream?.(); } catch (_) {}
@@ -475,7 +521,15 @@ const LiveStream = () => {
           remoteActiveUidRef.current = uid;
           playIntoContainer(user.videoTrack);
         }
-        if (mediaType === 'audio') user.audioTrack?.play();
+        if (mediaType === 'audio') {
+          try {
+            if (user.audioTrack) {
+              await playRemoteAudio(user.audioTrack);
+            }
+          } catch (e) {
+            console.error('[LIVE:UI] audio play error in retry:', e);
+          }
+        }
         setConnecting(false);
         setWaitingHost(false);
       });
@@ -499,14 +553,40 @@ const LiveStream = () => {
       });
       await c.join(data.appId, data.channelName, data.token, data.account);
       if (isHost) {
-        const mic = await AgoraRTC.createMicrophoneAudioTrack();
+        let mic = null;
+        try {
+          mic = await AgoraRTC.createMicrophoneAudioTrack({
+            AEC: true,
+            ANS: true,
+            AGC: true,
+            encoderConfig: 'music_standard'
+          });
+          if (mic) {
+            try { await mic.setEnabled(true); } catch (_) {}
+            try { await mic.setVolume?.(120); } catch (_) {}
+          }
+        } catch (e) {
+          console.warn('[LIVE:UI] mic track create failed in retry:', e);
+        }
         const cam = await AgoraRTC.createCameraVideoTrack({
           optimizationMode: 'motion',
           encoderConfig: { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 },
           cameraId: selectedCameraId || undefined
         });
-        await c.publish([mic, cam]);
-        setLocalTracks({ audio: mic, video: cam });
+        if (mic) {
+          try {
+            await cam.setEnabled(true);
+          } catch (_) {}
+          await c.publish([mic, cam]);
+          setLocalTracks({ audio: mic, video: cam });
+        } else {
+          try {
+            await cam.setEnabled(true);
+          } catch (_) {}
+          await c.publish([cam]);
+          setLocalTracks({ audio: null, video: cam });
+          setMuted(true);
+        }
         if (videoRef.current) playIntoContainer(cam);
         setConnecting(false);
         setWaitingHost(false);
@@ -780,8 +860,13 @@ const LiveStream = () => {
   const toggleMute = async () => {
     if (!localTracks.audio) return;
     const next = !muted;
-    await localTracks.audio.setEnabled(!next);
-    setMuted(next);
+    try {
+      await localTracks.audio.setEnabled(!next); // Enable when not muted, disable when muted
+      setMuted(next);
+    } catch (e) {
+      console.error('Error toggling mute:', e);
+      toast.error('Failed to toggle microphone');
+    }
   };
 
   const toggleVideo = async () => {
@@ -791,8 +876,13 @@ const LiveStream = () => {
     }
     if (!localTracks.video) return;
     const next = !videoOff;
-    await localTracks.video.setEnabled(!next);
-    setVideoOff(next);
+    try {
+      await localTracks.video.setEnabled(!next); // Enable when not off, disable when off
+      setVideoOff(next);
+    } catch (e) {
+      console.error('Error toggling video:', e);
+      toast.error('Failed to toggle video');
+    }
   };
 
   return (

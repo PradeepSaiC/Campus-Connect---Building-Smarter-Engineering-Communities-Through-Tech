@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { authAPI } from '../../services/api.js';
 import useAuthStore from '../../store/authStore.js';
 import { toast } from 'react-hot-toast';
-import { User, Mail, Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react';
+import { User, Mail, Eye, EyeOff, CheckCircle, XCircle, Camera, Plus, X } from 'lucide-react';
 
 const INTERESTS = [
   'Artificial Intelligence',
@@ -63,18 +63,22 @@ const SKILLS = [
 
 const RegisterForm = () => {
   const navigate = useNavigate();
-  const [step, setStep] = useState('usn'); // 'usn', 'otp', 'password', 'interests'
+  const [step, setStep] = useState('usn'); // 'usn', 'otp', 'password', 'photo', 'interests'
   const [formData, setFormData] = useState({
     usn: '',
     otp: '',
     password: '',
     confirmPassword: '',
+    photoURL: '',
     interests: [],
+    customInterests: [],
     skills: []
   });
   const [studentInfo, setStudentInfo] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [customInterestInput, setCustomInterestInput] = useState('');
 
   const handleChange = (e) => {
     setFormData({
@@ -133,7 +137,7 @@ const RegisterForm = () => {
       return;
     }
 
-    setStep('interests');
+    setStep('photo');
   };
 
   const handleInterestToggle = (interest) => {
@@ -154,17 +158,81 @@ const RegisterForm = () => {
     }));
   };
 
+  const handlePhotoNext = () => {
+    // Photo upload is optional, so we can proceed to interests
+    setStep('interests');
+  };
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('File must be < 5MB');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      setUploadingPhoto(true);
+      // Use public upload endpoint for registration
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/upload-public`, {
+        method: 'POST',
+        body: fd
+      });
+      const ct = res.headers.get('content-type') || '';
+      let data;
+      if (ct.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || 'Upload failed (non-JSON response)');
+      }
+      if (!res.ok || !data?.url) throw new Error(data?.message || 'Upload failed');
+      setFormData(prev => ({ ...prev, photoURL: data.url }));
+      toast.success('Profile photo uploaded');
+    } catch (err) {
+      toast.error(err?.message || 'Upload failed');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleAddCustomInterest = () => {
+    const trimmed = customInterestInput.trim();
+    if (!trimmed) return;
+    if (formData.interests.includes(trimmed) || formData.customInterests.includes(trimmed)) {
+      toast.error('This interest is already added');
+      return;
+    }
+    setFormData(prev => ({
+      ...prev,
+      customInterests: [...prev.customInterests, trimmed]
+    }));
+    setCustomInterestInput('');
+  };
+
+  const handleRemoveCustomInterest = (interest) => {
+    setFormData(prev => ({
+      ...prev,
+      customInterests: prev.customInterests.filter(i => i !== interest)
+    }));
+  };
+
   const handleFinalSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
+      // Combine fixed interests and custom interests
+      const allInterests = [...formData.interests, ...formData.customInterests];
+      
       const response = await authAPI.verifyOTP(
         formData.usn,
         formData.otp,
         formData.password,
-        formData.interests,
-        formData.skills
+        allInterests,
+        formData.skills,
+        formData.photoURL
       );
       
       // Auto-login after successful registration
@@ -337,6 +405,56 @@ const RegisterForm = () => {
     </form>
   );
 
+  const renderPhotoStep = () => (
+    <div className="space-y-6">
+      <div>
+        <label className="block text-sm font-medium opacity-80 mb-4">
+          Upload Profile Picture (Optional)
+        </label>
+        <div className="flex flex-col items-center space-y-4">
+          <div className="relative">
+            <div className="w-32 h-32 bg-base-300 rounded-full flex items-center justify-center overflow-hidden">
+              {formData.photoURL ? (
+                <img
+                  src={formData.photoURL}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <User className="w-16 h-16 opacity-50" />
+              )}
+              {uploadingPhoto && (
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                  <span className="loading loading-spinner loading-sm text-white" />
+                </div>
+              )}
+            </div>
+            <label className="absolute bottom-0 right-0 w-10 h-10 btn btn-primary btn-circle min-h-0 h-10 w-10 p-0 cursor-pointer">
+              <Camera className="w-5 h-5" />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoUpload}
+                disabled={uploadingPhoto}
+              />
+            </label>
+          </div>
+          <p className="text-xs opacity-70 text-center">
+            {formData.photoURL ? 'Photo uploaded! You can change it later.' : 'Click the camera icon to upload'}
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={handlePhotoNext}
+        className="w-full btn btn-primary"
+      >
+        Continue
+      </button>
+    </div>
+  );
+
   const renderInterestsStep = () => (
     <form onSubmit={handleFinalSubmit} className="space-y-6">
       <div>
@@ -369,6 +487,55 @@ const RegisterForm = () => {
         <p className="text-xs opacity-70 mt-2">
           Selected: {formData.interests.length} interests
         </p>
+      </div>
+
+      {/* Custom Interests */}
+      <div>
+        <label className="block text-sm font-medium opacity-80 mb-4">
+          Add Custom Interests (Optional)
+        </label>
+        <div className="flex gap-2 mb-3">
+          <input
+            type="text"
+            value={customInterestInput}
+            onChange={(e) => setCustomInterestInput(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAddCustomInterest();
+              }
+            }}
+            className="input input-bordered flex-1"
+            placeholder="Enter a custom interest"
+          />
+          <button
+            type="button"
+            onClick={handleAddCustomInterest}
+            className="btn btn-primary"
+            disabled={!customInterestInput.trim()}
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+        {formData.customInterests.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {formData.customInterests.map((interest, idx) => (
+              <span
+                key={idx}
+                className="badge badge-primary badge-lg gap-2"
+              >
+                {interest}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveCustomInterest(interest)}
+                  className="btn btn-ghost btn-xs btn-circle p-0 min-h-0 h-4 w-4"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <div>
@@ -405,7 +572,7 @@ const RegisterForm = () => {
 
       <button
         type="submit"
-        disabled={isLoading || formData.interests.length < 1}
+        disabled={isLoading || (formData.interests.length < 1 && formData.customInterests.length < 1)}
         className="w-full btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {isLoading ? (
@@ -424,6 +591,7 @@ const RegisterForm = () => {
     { key: 'usn', title: 'Enter USN', component: renderUsnStep },
     { key: 'otp', title: 'Verify OTP', component: renderOtpStep },
     { key: 'password', title: 'Set Password', component: renderPasswordStep },
+    { key: 'photo', title: 'Profile Photo', component: renderPhotoStep },
     { key: 'interests', title: 'Select Interests', component: renderInterestsStep }
   ];
 

@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../../store/authStore.js';
+import useChatStore from '../../store/chatStore.js';
 import socketService from '../../services/socket.js';
 import { toast } from 'react-hot-toast';
 import { 
@@ -30,12 +31,11 @@ import ErrorBoundary from '../common/ErrorBoundary.jsx';
 import CollegeDetails from './CollegeDetails.jsx';
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, token, logout } = useAuthStore();
+  const { user, token, logout, updateUser } = useAuthStore();
+  const totalUnreadChats = useChatStore((state) => state.getTotalUnreadCount());
   const [activeTab, setActiveTab] = useState('colleges');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [requestBadge, setRequestBadge] = useState(0);
-  const [chatPending, setChatPending] = useState(0);
-  const [videoPending, setVideoPending] = useState(0);
   const [requestsDefaultTab, setRequestsDefaultTab] = useState('chat');
   const [selectedCollegeId, setSelectedCollegeId] = useState('');
 
@@ -54,66 +54,116 @@ const Dashboard = () => {
     return () => {};
   }, [user, token, navigate]);
 
+  const fetchRequestCounts = useCallback(async () => {
+    try {
+      const [chatRecv, videoRecv] = await Promise.all([
+        chatRequestAPI.getRequests('received'),
+        videoCallRequestAPI.getRequests('received')
+      ]);
+      const videoP = (videoRecv.data || []).filter(r => r.status === 'pending').length;
+      const chatP = (chatRecv.data || []).filter(r => r.status === 'pending').length;
+      const count = chatP + videoP;
+      setRequestBadge(count);
+    } catch (_) {
+      setRequestBadge(0);
+    }
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     let timer;
-    const load = async () => {
-      try {
-        const [chatRecv, videoRecv] = await Promise.all([
-          chatRequestAPI.getRequests('received'),
-          videoCallRequestAPI.getRequests('received')
-        ]);
-        const chatP = (chatRecv.data || []).filter(r => r.status === 'pending').length;
-        const videoP = (videoRecv.data || []).filter(r => r.status === 'pending').length;
-        const count = chatP + videoP;
-        if (mounted) {
-          setChatPending(chatP);
-          setVideoPending(videoP);
-          setRequestBadge(count);
-        }
-      } catch (_) {
-        if (mounted) {
-          setRequestBadge(0);
-          setChatPending(0);
-          setVideoPending(0);
-        }
-      } finally {
-        timer = setTimeout(load, 20000);
-      }
+    const loop = async () => {
+      if (!mounted) return;
+      await fetchRequestCounts();
+      timer = setTimeout(loop, 20000);
     };
-    load();
+    loop();
     return () => { mounted = false; if (timer) clearTimeout(timer); };
-  }, []);
+  }, [fetchRequestCounts]);
 
   useEffect(() => {
     const s = socketService.isSocketConnected() ? socketService.socket : null;
     if (!s) return;
+    const refreshCounts = () => { fetchRequestCounts(); };
+
+    const onChatReqCreate = (payload) => {
+      try {
+        if (payload?.receiver && String(payload.receiver._id) === String(user?.id)) {
+          toast.success(`New chat request from ${payload?.sender?.name || 'student'}`);
+        }
+      } catch (_) {}
+      refreshCounts();
+    };
+
     const onChatReqUpdate = (payload) => {
       try {
-        if (payload?.status === 'accepted') {
+        if (payload?.status === 'accepted' && payload?.sender && String(payload.sender._id) === String(user?.id)) {
           setRequestsDefaultTab('chat');
-          toast.success(`${payload?.sender?.name || 'User'} accepted your chat request`);
+          toast.success(`${payload?.receiver?.name || 'User'} accepted your chat request`);
         }
       } catch (_) {}
+      refreshCounts();
     };
+
+    const onVideoReqCreate = (payload) => {
+      try {
+        if (payload?.receiver && String(payload.receiver._id) === String(user?.id)) {
+          toast.success(`New video call request from ${payload?.sender?.name || 'student'}`);
+        }
+      } catch (_) {}
+      refreshCounts();
+    };
+
     const onVideoReqUpdate = (payload) => {
       try {
-        if (payload?.status === 'accepted') {
+        if (payload?.status === 'accepted' && payload?.sender && String(payload.sender._id) === String(user?.id)) {
           setRequestsDefaultTab('video');
-          toast.success(`${payload?.sender?.name || 'User'} accepted your video call request. Start a call from Chat.`);
+          toast.success(`${payload?.receiver?.name || 'User'} accepted your video call request. Start a call from Chat.`);
         }
       } catch (_) {}
+      refreshCounts();
     };
+
+    const onProfileUpdate = (payload) => {
+      try {
+        if (payload?.userId && user && String(payload.userId) === String(user.id)) {
+          updateUser({ photoURL: payload.photoURL });
+        }
+        window.dispatchEvent(new CustomEvent('user_profile_updated', { 
+          detail: { userId: payload.userId, photoURL: payload.photoURL } 
+        }));
+      } catch (_) {}
+    };
+    const onCollegeProfileUpdate = (payload) => {
+      try {
+        if (payload?.collegeId && user?.college && String(payload.collegeId) === String(user.college.id)) {
+          updateUser({ collegeLogo: payload.collegeLogo });
+        }
+        window.dispatchEvent(new CustomEvent('college_profile_updated', { 
+          detail: { collegeId: payload.collegeId, collegeLogo: payload.collegeLogo } 
+        }));
+      } catch (_) {}
+    };
+
+    s.on('chat_request_created', onChatReqCreate);
     s.on('chat_request_updated', onChatReqUpdate);
+    s.on('video_request_created', onVideoReqCreate);
     s.on('video_request_updated', onVideoReqUpdate);
+    s.on('user_profile_updated', onProfileUpdate);
+    s.on('college_profile_updated', onCollegeProfileUpdate);
+
     return () => {
       const s2 = socketService.socket;
       if (s2) {
+        s2.off('chat_request_created', onChatReqCreate);
         s2.off('chat_request_updated', onChatReqUpdate);
+        s2.off('video_request_created', onVideoReqCreate);
         s2.off('video_request_updated', onVideoReqUpdate);
+        s2.off('user_profile_updated', onProfileUpdate);
+        s2.off('college_profile_updated', onCollegeProfileUpdate);
       }
     };
-  }, [socketService, token]);
+  }, [socketService, token, user, fetchRequestCounts, updateUser]);
 
   // Allow other components to open Chat tab for a specific user
   useEffect(() => {
@@ -275,8 +325,10 @@ const Dashboard = () => {
                   <div className="flex-1 text-left">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{item.label}</span>
-                      {item.id === 'chat' && chatPending > 0 && (
-                        <span className="inline-block w-2 h-2 rounded-full bg-base-400 animate-pulse" />
+                      {item.id === 'chat' && totalUnreadChats > 0 && (
+                        <span className="inline-flex items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs px-2 py-0.5 min-w-[20px]">
+                          {totalUnreadChats}
+                        </span>
                       )}
                     </div>
                     <p className="text-xs opacity-70 mt-0.5">{item.description}</p>
