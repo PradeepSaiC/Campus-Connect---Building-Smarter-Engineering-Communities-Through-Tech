@@ -19,6 +19,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const [duration, setDuration] = useState(0);
   const [cameras, setCameras] = useState([]);
   const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState('');
   const [selectedCameraId, setSelectedCameraId] = useState(() => {
     try { return localStorage.getItem('cc_camera_id') || ''; } catch (_) { return ''; }
   });
@@ -26,6 +27,8 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const [selectedQuality, setSelectedQuality] = useState(() => {
     try { return localStorage.getItem('cc_video_quality') || 'hd'; } catch (_) { return 'hd'; }
   });
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [audioError, setAudioError] = useState(null);
 
   const localVideoRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -115,15 +118,73 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
 
   const toggleMicrophone = async () => {
     try {
-      if (localTracksRef.current.audio) {
-        const newState = !isAudioEnabled;
-        await localTracksRef.current.audio.setEnabled(newState);
-        setIsAudioEnabled(newState);
-        toast.success(`Microphone ${newState ? 'enabled' : 'disabled'}`);
+      const audioTrack = localTracksRef.current?.audio;
+      if (!audioTrack) return;
+      
+      const newState = !isAudioEnabled;
+      
+      // If enabling, make sure audio context is active
+      if (newState && audioContextRef.current?.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+      
+      // Toggle the track
+      await audioTrack.setEnabled(newState);
+      setIsAudioEnabled(newState);
+      
+      // If we're enabling, ensure the track is properly published
+      if (newState && clientRef.current) {
+        try {
+          await clientRef.current.publish(audioTrack);
+        } catch (publishError) {
+          console.warn('Could not republish audio track:', publishError);
+        }
       }
     } catch (error) {
       console.error('Error toggling microphone:', error);
-      toast.error('Failed to toggle microphone');
+      toast.error('Failed to toggle microphone. Please check your audio settings.');
+      setAudioError(error.message);
+    }
+  };
+  
+  // Handle audio device change
+  const handleAudioDeviceChange = async (deviceId) => {
+    try {
+      setSelectedAudioDeviceId(deviceId);
+      
+      // Only proceed if we have an active audio track
+      if (!localTracksRef.current?.audio) return;
+      
+      // Create new audio track with the selected device
+      const [newAudioTrack] = await AgoraRTC.createMicrophoneAudioTrack({
+        microphoneId: deviceId,
+        AEC: true,
+        AGC: true,
+        ANS: true,
+        encoderConfig: 'speech_standard'
+      });
+      
+      // Replace the old track
+      const oldTrack = localTracksRef.current.audio;
+      if (oldTrack) {
+        await clientRef.current?.unpublish(oldTrack);
+        oldTrack.stop();
+        oldTrack.close();
+      }
+      
+      // Update the reference and publish new track
+      localTracksRef.current.audio = newAudioTrack;
+      if (clientRef.current) {
+        await clientRef.current.publish(newAudioTrack);
+      }
+      
+      // Update UI state
+      setIsAudioEnabled(true);
+      toast.success('Microphone device changed');
+    } catch (error) {
+      console.error('Error changing audio device:', error);
+      toast.error('Failed to change audio device');
+      setAudioError(error.message);
     }
   };
 
@@ -313,11 +374,20 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   useEffect(() => {
     const getAudioDevices = async () => {
       try {
+        // Request permission first
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        
         const devices = await navigator.mediaDevices.enumerateDevices();
         const audioInputs = devices.filter(device => device.kind === 'audioinput');
         setAudioDevices(audioInputs);
+        
+        // Set the first available audio device as default if none selected
+        if (audioInputs.length > 0 && !selectedAudioDeviceId) {
+          setSelectedAudioDeviceId(audioInputs[0].deviceId);
+        }
       } catch (error) {
         console.error('Error getting audio devices:', error);
+        setAudioError('Could not access microphone. Please check your permissions.');
       }
     };
     
@@ -326,8 +396,17 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     // Listen for device changes
     navigator.mediaDevices.addEventListener('devicechange', getAudioDevices);
     
+    // Start audio level monitoring
+    const audioLevelInterval = setInterval(() => {
+      if (localTracksRef.current?.audio?.getVolumeLevel) {
+        const level = Math.floor(localTracksRef.current.audio.getVolumeLevel() * 100);
+        setAudioLevel(level);
+      }
+    }, 100);
+    
     return () => {
       navigator.mediaDevices.removeEventListener('devicechange', getAudioDevices);
+      clearInterval(audioLevelInterval);
       // Clean up audio context on unmount
       if (audioContextRef.current) {
         audioContextRef.current.close().catch(console.error);
@@ -339,13 +418,30 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     try {
       // Initialize audio context if not already done
       if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
+          latencyHint: 'interactive',
+          sampleRate: 48000
+        });
       }
       
       // Resume audio context if suspended
-      if (audioContextRef.current.state === 'suspended') {
+      if (audioContextRef.state === 'suspended') {
         await audioContextRef.current.resume();
       }
+      
+      // Add user gesture handler for audio context
+      const handleUserGesture = async () => {
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+        }
+        window.removeEventListener('click', handleUserGesture);
+        window.removeEventListener('keydown', handleUserGesture);
+        window.removeEventListener('touchstart', handleUserGesture);
+      };
+      
+      window.addEventListener('click', handleUserGesture);
+      window.addEventListener('keydown', handleUserGesture);
+      window.addEventListener('touchstart', handleUserGesture);
       if (!callData?.channelName || !callData?.token) {
         console.warn('VCMdl: Missing credentials to join');
         return;
@@ -366,14 +462,27 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         mode: 'rtc', 
         codec: 'h264',
         audio: {
-          AEC: true,
-          ANS: true,
-          AGC: true,
+          AEC: true,  // Acoustic Echo Cancellation
+          ANS: true,  // Automatic Noise Suppression
+          AGC: true,  // Automatic Gain Control
           codec: 'aac',
           sampleRate: 48000,
           channelCount: 1,
-          bitrate: 48
-        }
+          bitrate: 64,  // Increased from 48 to 64 kbps
+          stereo: false
+        },
+        // Add WebRTC configuration for better connectivity
+        websocketRetryConfig: {
+          timeout: 2000,
+          timeoutFactor: 1.5,
+          maxRetryCount: 3
+        },
+        // Enable ICE restart on connection failure
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ]
       });
       clientRef.current = client;
 
