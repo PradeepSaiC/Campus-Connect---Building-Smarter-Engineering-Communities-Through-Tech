@@ -45,6 +45,8 @@ const CallStudio = () => {
   const containerRef = useRef(null);
   const localRef = useRef(null);
   const socketHandlerRef = useRef(null);
+  const ensureMicTimerRef = useRef(null);
+const ensureMicTimerRef = useRef(null);
 
   const playInto = (track, container) => {
     if (!container) return;
@@ -331,6 +333,37 @@ const CallStudio = () => {
           }
         });
 
+        // Re-publish on reconnect and recreate mic if missing
+        client.on('connection-state-change', async (curState) => {
+          if (curState !== 'CONNECTED') return;
+          try {
+            const c = clientRef.current;
+            let { audio, video } = localTracksRef.current;
+            if (!audio) {
+              try {
+                audio = await AgoraRTC.createMicrophoneAudioTrack({
+                  AEC: true,
+                  ANS: true,
+                  AGC: true,
+                  encoderConfig: 'speech_standard'
+                });
+                try { await audio.setEnabled(true); } catch (_) {}
+                try { await audio.setVolume?.(100); } catch (_) {}
+                localTracksRef.current.audio = audio;
+                localTracks.current.audio = audio;
+              } catch (e) {
+                console.warn('[CALL] mic recreate on reconnect failed', e);
+              }
+            }
+            const toPublish = [];
+            if (audio) toPublish.push(audio);
+            if (video) toPublish.push(video);
+            if (c && toPublish.length) {
+              try { await c.publish(toPublish); } catch (e) { console.warn('[CALL] republish failed', e); }
+            }
+          } catch (_) {}
+        });
+
         // Handle call ended event from server
         callEndedHandler = () => {
           toast.success('Call ended by other participant');
@@ -474,8 +507,12 @@ const CallStudio = () => {
             ANS: true,
             AGC: true,
             encoderConfig: 'speech_standard'
-          }); 
-        } catch (_) {}
+          });
+          try { await mic.setEnabled(true); } catch (_) {}
+          try { await mic.setVolume?.(100); } catch (_) {}
+        } catch (e) {
+          console.warn('[CALL] Mic create failed, will retry after join:', e);
+        }
         try {
           cam = await AgoraRTC.createCameraVideoTrack({
             optimizationMode: 'motion',
@@ -493,6 +530,36 @@ const CallStudio = () => {
         if (cam && localRef.current) playInto(cam, localRef.current);
         setConnecting(false);
         hasJoinedRef.current = true;
+
+        // Safety: ensure a mic exists/published shortly after join
+        try {
+          if (ensureMicTimerRef.current) clearTimeout(ensureMicTimerRef.current);
+        } catch (_) {}
+        ensureMicTimerRef.current = setTimeout(async () => {
+          try {
+            const c = clientRef.current;
+            let currentMic = localTracks.current.audio;
+            if (!currentMic) {
+              try {
+                currentMic = await AgoraRTC.createMicrophoneAudioTrack({
+                  AEC: true,
+                  ANS: true,
+                  AGC: true,
+                  encoderConfig: 'speech_standard'
+                });
+                try { await currentMic.setEnabled(true); } catch (_) {}
+                try { await currentMic.setVolume?.(100); } catch (_) {}
+                if (currentMic && c) {
+                  await c.publish([currentMic]);
+                  localTracks.current.audio = currentMic;
+                  console.log('[CALL] Mic republished after missing');
+                }
+              } catch (e) {
+                console.warn('[CALL] Mic ensure failed', e);
+              }
+            }
+          } catch (_) {}
+        }, 1500);
 
         // Periodic re-subscribe to mitigate drift
         const driftTimer = setInterval(async () => {
@@ -527,6 +594,7 @@ const CallStudio = () => {
         if (callEndedHandler) {
           window.removeEventListener('call_ended', callEndedHandler);
         }
+        try { if (ensureMicTimerRef.current) clearTimeout(ensureMicTimerRef.current); } catch (_) {}
       } catch (_) {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
