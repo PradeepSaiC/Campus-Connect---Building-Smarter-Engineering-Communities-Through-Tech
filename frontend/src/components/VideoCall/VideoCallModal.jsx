@@ -32,6 +32,27 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
 
   const localVideoRef = useRef(null);
   const audioContextRef = useRef(null);
+  const localTracksRef = useRef({ audio: null, video: null, screen: null });
+  const networkQualityTimerRef = useRef(null);
+  
+  // Initialize audio context with error handling
+  const initAudioContext = async () => {
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
+          latencyHint: 'interactive',
+          sampleRate: 48000
+        });
+      }
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+      return audioContextRef.current;
+    } catch (error) {
+      console.error('Failed to initialize audio context:', error);
+      return null;
+    }
+  };
   
   const playRemoteAudio = async (track) => {
     if (!track) return;
@@ -394,54 +415,23 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     getAudioDevices();
     
     // Listen for device changes
-    navigator.mediaDevices.addEventListener('devicechange', getAudioDevices);
-    
-    // Start audio level monitoring
-    const audioLevelInterval = setInterval(() => {
-      if (localTracksRef.current?.audio?.getVolumeLevel) {
-        const level = Math.floor(localTracksRef.current.audio.getVolumeLevel() * 100);
-        setAudioLevel(level);
-      }
-    }, 100);
-    
-    return () => {
-      navigator.mediaDevices.removeEventListener('devicechange', getAudioDevices);
-      clearInterval(audioLevelInterval);
-      // Clean up audio context on unmount
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(console.error);
-      }
-    };
-  }, []);
-
-  const joinAndSetup = async () => {
-    try {
-      // Initialize audio context if not already done
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
-          latencyHint: 'interactive',
-          sampleRate: 48000
-        });
-      }
-      
-      // Resume audio context if suspended
-      if (audioContextRef.state === 'suspended') {
-        await audioContextRef.current.resume();
-      }
+      // Initialize audio context
+      await initAudioContext();
       
       // Add user gesture handler for audio context
       const handleUserGesture = async () => {
-        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-          await audioContextRef.current.resume();
+        try {
+          await initAudioContext();
+        } catch (e) {
+          console.warn('Could not resume audio context:', e);
         }
-        window.removeEventListener('click', handleUserGesture);
-        window.removeEventListener('keydown', handleUserGesture);
-        window.removeEventListener('touchstart', handleUserGesture);
       };
       
-      window.addEventListener('click', handleUserGesture);
-      window.addEventListener('keydown', handleUserGesture);
-      window.addEventListener('touchstart', handleUserGesture);
+      // Set up user interaction listeners for audio context
+      const interactionEvents = ['click', 'keydown', 'touchstart'];
+      interactionEvents.forEach(event => {
+        window.addEventListener(event, handleUserGesture, { once: true });
+      });
       if (!callData?.channelName || !callData?.token) {
         console.warn('VCMdl: Missing credentials to join');
         return;
@@ -462,42 +452,122 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         mode: 'rtc', 
         codec: 'h264',
         audio: {
-          AEC: true,  // Acoustic Echo Cancellation
-          ANS: true,  // Automatic Noise Suppression
-          AGC: true,  // Automatic Gain Control
+          AEC: true,      // Acoustic Echo Cancellation
+          ANS: true,      // Automatic Noise Suppression
+          AGC: true,      // Automatic Gain Control
           codec: 'aac',
           sampleRate: 48000,
           channelCount: 1,
-          bitrate: 64,  // Increased from 48 to 64 kbps
-          stereo: false
+          bitrate: 64,    // 64kbps for better voice quality
+          stereo: false,
+          audioProcessing: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
         },
-        // Add WebRTC configuration for better connectivity
+        // Optimized WebRTC configuration
         websocketRetryConfig: {
           timeout: 2000,
           timeoutFactor: 1.5,
           maxRetryCount: 3
         },
-        // Enable ICE restart on connection failure
+        // ICE servers for better NAT traversal
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' }
-        ]
-      });
+        ],
+        // Optimize for low-latency communication
+        turnServer: {
+          turnServerURL: 'turn:turn.agora.io:3478',
+          username: 'agora',
+          password: 'agora',
+          udpport: 3478,
+          tcpport: 3478,
+          forceturn: false
+        }
       clientRef.current = client;
 
-      // Enable dual stream and set audio profile
-      try { 
-        await client.enableDualStream(); 
+      // Configure audio and video settings
+      try {
+        // Set audio profile for voice calls
         await client.setAudioProfile('speech_standard');
+        
+        // Enable dual stream for adaptive quality
+        try {
+          await client.enableDualStream();
+          await client.setLowStreamParameter({
+            width: 160,
+            height: 90,
+            framerate: 15,
+            bitrate: 45
+          });
+        } catch (e) {
+          console.warn('Dual stream not supported:', e);
+        }
+        
+        // Set audio frame rate
         await client.setAudioFrameRate(24);
+        
+        // Enable audio volume indicator
+        await client.enableAudioVolumeIndicator();
+        
       } catch (e) {
-        console.warn('Could not set audio profile:', e);
+        console.warn('Could not configure client settings:', e);
       }
 
+      // Network quality monitoring
+      client.on('network-quality', (stats) => {
+        try {
+          const { downlinkNetworkQuality, uplinkNetworkQuality } = stats;
+          
+          // Adjust audio bitrate based on network quality
+          if (localTracksRef.current.audio) {
+            if (uplinkNetworkQuality > 3) { // Poor network
+              localTracksRef.current.audio.setBitrate(32);
+            } else {
+              localTracksRef.current.audio.setBitrate(64);
+            }
+          }
+          
+          // Log quality metrics
+          console.log('Network quality - Downlink:', downlinkNetworkQuality, 'Uplink:', uplinkNetworkQuality);
+          
+        } catch (error) {
+          console.error('Error handling network quality:', error);
+        }
+      });
+      
       // Remote user handlers with improved error handling
       client.on('user-published', async (user, mediaType) => {
         console.log(`User ${user.uid} published ${mediaType}`);
+        
+        // Handle audio tracks
+        if (mediaType === 'audio') {
+          try {
+            await client.subscribe(user, 'audio');
+            const audioTrack = user.audioTrack;
+            if (audioTrack) {
+              await playRemoteAudio(audioTrack);
+            }
+          } catch (error) {
+            console.error('Error subscribing to remote audio:', error);
+          }
+        }
+        
+        // Handle video tracks
+        if (mediaType === 'video') {
+          try {
+            await client.subscribe(user, 'video');
+            const videoTrack = user.videoTrack;
+            if (videoTrack && remoteVideoRef.current) {
+              videoTrack.play(remoteVideoRef.current);
+            }
+          } catch (error) {
+            console.error('Error subscribing to remote video:', error);
+          }
+        }
         
         try {
           // Subscribe to the user's stream
