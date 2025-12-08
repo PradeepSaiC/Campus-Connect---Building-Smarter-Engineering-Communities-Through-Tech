@@ -8,30 +8,42 @@ import useAuthStore from '../../store/authStore.js';
 const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRinging = false, onAcceptCall, onRejectCall, onEndCall }) => {
   const { user } = useAuthStore();
   
-  // Minimal runtime state kept; debug logs removed
-
+  // State management
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [participantCount, setParticipantCount] = useState(1);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [duration, setDuration] = useState(0);
   const [cameras, setCameras] = useState([]);
+  const [audioDevices, setAudioDevices] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState(() => {
     try { return localStorage.getItem('cc_camera_id') || ''; } catch (_) { return ''; }
   });
   const [cameraError, setCameraError] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState(() => {
-    try { return localStorage.getItem('cc_video_quality') || 'uhd'; } catch (_) { return 'uhd'; }
+    try { return localStorage.getItem('cc_video_quality') || 'hd'; } catch (_) { return 'hd'; }
   });
 
   const localVideoRef = useRef(null);
+  const audioContextRef = useRef(null);
+  
   const playRemoteAudio = async (track) => {
     if (!track) return;
     
     try {
+      // Initialize audio context if not already done
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      
+      // Resume audio context if suspended
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+
       // First ensure the track is enabled
       await track.setEnabled(true);
       
@@ -50,6 +62,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         // Set up a one-time click handler to resume audio
         const resumeAudio = async () => {
           try {
+            await audioContextRef.current.resume();
             await track.play();
             console.log('Resumed audio after user interaction');
           } catch (e) {
@@ -63,8 +76,11 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         
         // Also try to resume when the call is accepted
         if (onAcceptCall) {
-          onAcceptCall().then(() => {
-            try { track.play(); } catch (_) {}
+          onAcceptCall().then(async () => {
+            try { 
+              await audioContextRef.current.resume();
+              await track.play(); 
+            } catch (_) {}
           });
         }
       }
@@ -96,6 +112,20 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       })();
     }
   }, [isOpen]);
+
+  const toggleMicrophone = async () => {
+    try {
+      if (localTracksRef.current.audio) {
+        const newState = !isAudioEnabled;
+        await localTracksRef.current.audio.setEnabled(newState);
+        setIsAudioEnabled(newState);
+        toast.success(`Microphone ${newState ? 'enabled' : 'disabled'}`);
+      }
+    } catch (error) {
+      console.error('Error toggling microphone:', error);
+      toast.error('Failed to toggle microphone');
+    }
+  };
 
   const preflightAndCreateTracks = async () => {
     const client = clientRef.current;
@@ -279,8 +309,43 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     }
   };
 
+  // Load available audio devices
+  useEffect(() => {
+    const getAudioDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        setAudioDevices(audioInputs);
+      } catch (error) {
+        console.error('Error getting audio devices:', error);
+      }
+    };
+    
+    getAudioDevices();
+    
+    // Listen for device changes
+    navigator.mediaDevices.addEventListener('devicechange', getAudioDevices);
+    
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', getAudioDevices);
+      // Clean up audio context on unmount
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(console.error);
+      }
+    };
+  }, []);
+
   const joinAndSetup = async () => {
     try {
+      // Initialize audio context if not already done
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      
+      // Resume audio context if suspended
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
       if (!callData?.channelName || !callData?.token) {
         console.warn('VCMdl: Missing credentials to join');
         return;
@@ -948,41 +1013,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
           ) : (
             <>
               <button
-                onClick={async () => {
-                  const t = localTracksRef.current.audio;
-                  if (!t) return;
-                  const newMutedState = !isMuted;
-                  try {
-                    await t.setEnabled(!newMutedState); // Enable when not muted, disable when muted
-                    setIsMuted(newMutedState);
-                  } catch (e) {
-                    console.error('Error toggling microphone:', e);
-                    toast.error('Failed to toggle microphone');
-                  }
-                }}
+                onClick={toggleMicrophone}
                 className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                  isMuted ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  isAudioEnabled ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-red-600 text-white'
                 }`}
+                title={isAudioEnabled ? 'Mute' : 'Unmute'}
               >
-                {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-              </button>
-
-              <button
-                onClick={async () => {
-                  const { audio } = localTracksRef.current;
-                  if (audio) {
-                    try {
-                      await audio.setEnabled(!isMuted);
-                      setIsMuted(!isMuted);
-                    } catch (e) {
-                      console.error('Error toggling mute:', e);
-                    }
-                  }
-                }}
-                className={`p-3 rounded-full ${isMuted ? 'bg-red-500' : 'bg-gray-600 hover:bg-gray-700'} text-white transition-colors`}
-                title={isMuted ? 'Unmute' : 'Mute'}
-              >
-                {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                {isAudioEnabled ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
               </button>
 
               <button

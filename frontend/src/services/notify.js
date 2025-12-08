@@ -17,38 +17,28 @@ function shouldShow(key, ttlMs) {
 }
 
 function desktopNotify(title, body) {
+  // Completely disable desktop notifications
+  return;
+  
+  // The following code is kept but unreachable as a reference
   try {
     if (!('Notification' in window)) return;
-    if (document.hasFocus()) return; // avoid duplicates when focused
     
-    // Create notification options with silent flag
+    // Create completely silent notification options
     const options = {
       body,
-      silent: true, // This disables the default notification sound
-      icon: '/favicon.ico', // Optional: Add your app icon
-      vibrate: [200, 100, 200] // Optional: Add haptic feedback instead of sound
+      silent: true, // Ensure no sound
+      icon: '/favicon.ico',
+      requireInteraction: false,
+      vibrate: [] // No vibration
     };
 
     if (Notification.permission === 'granted') {
-      // Create and show the notification
-      const notification = new Notification(title || 'Campus Connect', options);
-      
-      // Auto-close notification after 5 seconds
-      setTimeout(() => {
-        notification.close();
-      }, 5000);
-      
-    } else if (Notification.permission !== 'denied') {
-      // Request permission if not denied
-      Notification.requestPermission().then((perm) => {
-        if (perm === 'granted') {
-          const notification = new Notification(title || 'Campus Connect', options);
-          setTimeout(() => notification.close(), 5000);
-        }
-      });
+      // Don't show any notifications even if permission is granted
+      return;
     }
   } catch (error) {
-    console.warn('Error showing desktop notification:', error);
+    console.warn('Notification error:', error);
   }
 }
 
@@ -56,7 +46,9 @@ function show(kind, message, opts = {}) {
   const { key, ttlMs = 2500, desktop = false, title } = opts;
   if (!message) return;
   if (!shouldShow(key || message, ttlMs)) return;
-  if (desktop) desktopNotify(title || 'Campus Connect', message);
+  
+  // Disable all desktop notifications
+  // desktopNotify is intentionally not called to prevent any notifications
   switch (kind) {
     case 'success':
       return toast.success(message);
@@ -80,11 +72,8 @@ const notify = {
   warn: (msg, opts) => show('warn', msg, opts),
   loading: (msg, opts) => show('loading', msg, opts),
   requestPermission: () => {
-    try {
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
-    } catch (_) {}
+    // Don't request notification permissions at all
+    return Promise.resolve('denied');
   }
 };
 
