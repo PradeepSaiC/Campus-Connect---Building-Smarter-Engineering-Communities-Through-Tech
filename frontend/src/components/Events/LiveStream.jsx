@@ -178,10 +178,12 @@ const LiveStream = () => {
             return;
           }
           if (mediaType === 'audio') {
-            // Play audio only for the active remote video publisher (if chosen), else ignore
-            if (remoteActiveUidRef.current && remoteActiveUidRef.current !== uid) {
-              return;
-            }
+        // Always allow audio; if no active video yet, claim this uid for audio-first publish
+        if (!remoteActiveUidRef.current) {
+          remoteActiveUidRef.current = uid;
+        } else if (remoteActiveUidRef.current !== uid) {
+          return;
+        }
             try { 
               await c.subscribe(user, 'audio'); 
               if (user.audioTrack) {

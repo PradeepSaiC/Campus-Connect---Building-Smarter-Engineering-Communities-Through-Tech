@@ -13,6 +13,8 @@ const CallStudio = () => {
   const qs = new URLSearchParams(window.location.search);
   const isCaller = qs.get('caller') === '1';
   const isAcceptFlow = qs.get('accept') === '1';
+  const prefilledChannel = qs.get('channel') || '';
+  const prefilledToken = qs.get('token') || '';
 
   const [connecting, setConnecting] = useState(true);
   const [joinStatus, setJoinStatus] = useState('Joining...');
@@ -65,25 +67,29 @@ const CallStudio = () => {
 
   useEffect(() => {
     let mounted = true;
+    let callEndedHandler = null;
     (async () => {
       try {
         const cred = await videoCallAPI.getCredentials();
         const appId = cred?.data?.appId;
         if (!appId) throw new Error('Agora App ID missing');
         // Acquire call credentials
-        let channelName = null, token = null, uidFromServer = null, tries = 0;
+        let channelName = prefilledChannel || null;
+        let token = prefilledToken || null;
+        let uidFromServer = null;
+        let tries = 0;
         if (isAcceptFlow && !isCaller) {
           // If opened via Accept button, fetch receiver-specific credentials first
           try {
             setJoinStatus('Joining...');
             const acc = await videoCallAPI.acceptCall(callId);
-            channelName = acc?.data?.channelName || channelName;
-            token = acc?.data?.token || token;
+            channelName = channelName || acc?.data?.channelName || acc?.data?.channel || null;
+            token = token || acc?.data?.token || null;
             uidFromServer = acc?.data?.uid || acc?.data?.account || uidFromServer;
           } catch (_) {}
         }
         // If still missing, poll shared credentials until ready
-        while (tries < 15 && (!channelName || !token)) {
+        while (tries < 10 && (!channelName || !token)) {
           try {
             const callCred = await videoCallAPI.getCallCredentials(callId);
             channelName = callCred?.data?.channelName || channelName;
@@ -92,7 +98,7 @@ const CallStudio = () => {
             if (channelName && token) break;
           } catch (_) {}
           setJoinStatus('Joining...');
-          await new Promise(r => setTimeout(r, 800));
+          await new Promise(r => setTimeout(r, 500));
           tries += 1;
         }
         if (!channelName || !token) throw new Error('Call credentials missing');
@@ -256,20 +262,13 @@ const CallStudio = () => {
         });
 
         // Handle call ended event from server
-        const handleCallEnded = (event) => {
+        callEndedHandler = () => {
           toast.success('Call ended by other participant');
           setTimeout(() => {
             try { window.close(); } catch (_) {}
           }, 1000);
         };
-        
-        // Add event listener for call_ended
-        window.addEventListener('call_ended', handleCallEnded);
-        
-        // Clean up event listener
-        return () => {
-          window.removeEventListener('call_ended', handleCallEnded);
-        };
+        window.addEventListener('call_ended', callEndedHandler);
 
         // Use the same UID/account the backend signed into the token.
         const joinUid = uidFromServer || String(user?.id || user?._id || '');
@@ -448,6 +447,9 @@ const CallStudio = () => {
         if (audio) { try { audio.stop(); audio.close(); } catch (_) {} }
         if (video) { try { video.stop(); video.close(); } catch (_) {} }
         if (c) c.leave();
+        if (callEndedHandler) {
+          window.removeEventListener('call_ended', callEndedHandler);
+        }
       } catch (_) {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -189,7 +189,14 @@ const VideoCallManager = () => {
       const senderId = String(data?.sender?._id || data?.senderId || '');
       // Only the caller auto-opens here; receiver already opened via Accept button
       if (myId && senderId && myId === senderId) {
-        if (data?.callId) window.open(`/call/${data.callId}?caller=1`, '_blank');
+        if (data?.callId) {
+          const q = new URLSearchParams({
+            caller: '1',
+            channel: data.channelName || '',
+            token: data.token || ''
+          });
+          window.open(`/call/${data.callId}?${q.toString()}`, '_blank');
+        }
       }
     } catch (_) {}
     setActiveCall(null);
@@ -238,8 +245,15 @@ const VideoCallManager = () => {
       const response = await videoCallAPI.acceptCall(callData.callId);
       stopRingtone();
       setIncomingCall(null);
-      // Open Call Studio immediately; it will poll credentials if needed
-      try { window.open(`/call/${callData.callId}?accept=1`, '_blank'); } catch (_) {}
+      // Open Call Studio immediately; pass credentials to avoid polling lag
+      try { 
+        const q = new URLSearchParams({
+          accept: '1',
+          channel: response?.data?.channelName || callData.channelName || '',
+          token: response?.data?.token || ''
+        });
+        window.open(`/call/${callData.callId}?${q.toString()}`, '_blank'); 
+      } catch (_) {}
       setActiveCall(null);
       notify.success('Call accepted! Opening call...', { key: `call_accepted_${callData.callId}`, ttlMs: 2000 });
     } catch (error) {
