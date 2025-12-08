@@ -46,7 +46,6 @@ const CallStudio = () => {
   const localRef = useRef(null);
   const socketHandlerRef = useRef(null);
   const ensureMicTimerRef = useRef(null);
-const ensureMicTimerRef = useRef(null);
 
   const playInto = (track, container) => {
     if (!container) return;
