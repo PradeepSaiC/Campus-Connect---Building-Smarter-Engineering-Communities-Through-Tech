@@ -20,14 +20,36 @@ function desktopNotify(title, body) {
   try {
     if (!('Notification' in window)) return;
     if (document.hasFocus()) return; // avoid duplicates when focused
+    
+    // Create notification options with silent flag
+    const options = {
+      body,
+      silent: true, // This disables the default notification sound
+      icon: '/favicon.ico', // Optional: Add your app icon
+      vibrate: [200, 100, 200] // Optional: Add haptic feedback instead of sound
+    };
+
     if (Notification.permission === 'granted') {
-      new Notification(title || 'Notification', { body });
+      // Create and show the notification
+      const notification = new Notification(title || 'Campus Connect', options);
+      
+      // Auto-close notification after 5 seconds
+      setTimeout(() => {
+        notification.close();
+      }, 5000);
+      
     } else if (Notification.permission !== 'denied') {
+      // Request permission if not denied
       Notification.requestPermission().then((perm) => {
-        if (perm === 'granted') new Notification(title || 'Notification', { body });
+        if (perm === 'granted') {
+          const notification = new Notification(title || 'Campus Connect', options);
+          setTimeout(() => notification.close(), 5000);
+        }
       });
     }
-  } catch (_) {}
+  } catch (error) {
+    console.warn('Error showing desktop notification:', error);
+  }
 }
 
 function show(kind, message, opts = {}) {

@@ -286,6 +286,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         return;
       }
       setIsConnecting(true);
+      
       // Get Agora App ID
       const cred = await videoCallAPI.getCredentials();
       const appId = cred?.data?.appId;
@@ -295,71 +296,104 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         return;
       }
 
-      // Create client (rtc + h264) for low latency 1:1
-      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
+      // Create client with optimized settings
+      const client = AgoraRTC.createClient({ 
+        mode: 'rtc', 
+        codec: 'h264',
+        audio: {
+          AEC: true,
+          ANS: true,
+          AGC: true,
+          codec: 'aac',
+          sampleRate: 48000,
+          channelCount: 1,
+          bitrate: 48
+        }
+      });
       clientRef.current = client;
-      // Low-latency settings
-      try { await client.enableDualStream?.(); } catch (_) {}
-      try { await client.setLowStreamParameter?.({ width: 160, height: 90, frameRate: 15, bitrate: 120 }); } catch (_) {}
-      try { await client.setAudioProfile?.('speech_low_latency'); } catch (_) {}
 
-      // Remote user handlers
+      // Enable dual stream and set audio profile
+      try { 
+        await client.enableDualStream(); 
+        await client.setAudioProfile('speech_standard');
+        await client.setAudioFrameRate(24);
+      } catch (e) {
+        console.warn('Could not set audio profile:', e);
+      }
+
+      // Remote user handlers with improved error handling
       client.on('user-published', async (user, mediaType) => {
         console.log(`User ${user.uid} published ${mediaType}`);
-        console.log('Has audio:', user.hasAudio, 'Has video:', user.hasVideo);
         
         try {
+          // Subscribe to the user's stream
           await client.subscribe(user, mediaType);
           console.log(`Subscribed to ${mediaType} for user ${user.uid}`);
           
           if (mediaType === 'video') {
-            // Force low stream and set audio-fallback for poor network
-            try { 
-              await client.setRemoteVideoStreamType?.(user, 1);
-              console.log('Set remote video stream type to low for user:', user.uid);
-            } catch (e) { 
-              console.warn('Failed to set remote video stream type:', e);
-            }
-            
-            try { 
-              await client.setStreamFallbackOption?.(user, 2);
-              console.log('Set stream fallback option for user:', user.uid);
-            } catch (e) { 
-              console.warn('Failed to set stream fallback option:', e);
-            }
-            
-            setRemoteStream(user);
-            if (remoteVideoRef.current) {
-              try { 
-                remoteVideoRef.current.innerHTML = ''; 
-                user.videoTrack?.play(remoteVideoRef.current, { mirror: false });
-                console.log('Playing video track for user:', user.uid);
-              } catch (e) {
-                console.error('Error playing video track:', e);
+            try {
+              // Set video quality and fallback options
+              await client.setRemoteVideoStreamType?.(user, 1); // Low quality stream
+              await client.setStreamFallbackOption?.(user, 2);  // Auto-fallback based on network
+              
+              // Update remote stream state
+              setRemoteStream(user);
+              
+              // Play the video track
+              if (remoteVideoRef.current && user.videoTrack) {
+                try {
+                  // Clear previous video if any
+                  remoteVideoRef.current.innerHTML = '';
+                  // Play with hardware acceleration and proper scaling
+                  await user.videoTrack.play(remoteVideoRef.current, { 
+                    mirror: false,
+                    fit: 'contain'
+                  });
+                  
+                  // Ensure video element has proper styling
+                  const videoElement = remoteVideoRef.current.querySelector('video');
+                  if (videoElement) {
+                    videoElement.style.width = '100%';
+                    videoElement.style.height = '100%';
+                    videoElement.style.objectFit = 'contain';
+                  }
+                  
+                  console.log('Playing video track for user:', user.uid);
+                } catch (e) {
+                  console.error('Error playing video track:', e);
+                  toast.error('Could not display video. Trying to reconnect...');
+                }
               }
+            } catch (e) {
+              console.error('Error setting up video:', e);
             }
           }
           
           if (mediaType === 'audio') {
-            try {
-              if (user.audioTrack) {
-                await playRemoteAudio(user.audioTrack);
-                console.log('Successfully playing audio track for user:', user.uid);
-              } else {
-                console.warn('No audio track found for user:', user.uid);
-              }
-            } catch (e) {
-              console.error('Error playing audio track:', e);
-              setTimeout(async () => {
-                try {
-                  if (user.audioTrack) {
-                    await playRemoteAudio(user.audioTrack);
-                  }
-                } catch (retryError) {
-                  console.error('Retry audio play failed:', retryError);
+            const playAudioWithRetry = async (retryCount = 0) => {
+              try {
+                if (user.audioTrack) {
+                  // Set volume and play
+                  await user.audioTrack.setVolume(100);
+                  await user.audioTrack.play();
+                  console.log('Playing audio track for user:', user.uid);
                 }
-              }, 500);
-            }
+              } catch (e) {
+                console.error('Error playing audio track:', e);
+                
+                // Retry up to 3 times with exponential backoff
+                if (retryCount < 3) {
+                  const delay = 500 * Math.pow(2, retryCount);
+                  console.log(`Retrying audio in ${delay}ms...`);
+                  setTimeout(() => playAudioWithRetry(retryCount + 1), delay);
+                } else {
+                  toast.error('Could not start audio. Please check your audio settings.');
+                }
+              }
+            };
+            
+            // Start audio playback with retry
+            playAudioWithRetry();
           }
           
           setParticipantCount((c) => Math.max(1, c + 1));
