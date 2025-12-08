@@ -30,17 +30,47 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const localVideoRef = useRef(null);
   const playRemoteAudio = async (track) => {
     if (!track) return;
-    try { await track.setEnabled(true); } catch (_) {}
-    try { await track.setVolume?.(100); } catch (_) {}
+    
     try {
-      await track.play();
-    } catch (err) {
-      console.warn('Audio autoplay blocked', err);
-      const resume = () => {
-        try { track.play(); } catch (_) {}
-        window.removeEventListener('click', resume);
-      };
-      window.addEventListener('click', resume, { once: true });
+      // First ensure the track is enabled
+      await track.setEnabled(true);
+      
+      // Set volume to maximum
+      if (typeof track.setVolume === 'function') {
+        await track.setVolume(100);
+      }
+      
+      // Try to play the track
+      try {
+        await track.play();
+        console.log('Remote audio track is playing');
+      } catch (playError) {
+        console.warn('Auto-play prevented, waiting for user interaction:', playError);
+        
+        // Set up a one-time click handler to resume audio
+        const resumeAudio = async () => {
+          try {
+            await track.play();
+            console.log('Resumed audio after user interaction');
+          } catch (e) {
+            console.error('Failed to resume audio:', e);
+            toast.error('Could not play audio. Please check your audio output device.');
+          }
+          window.removeEventListener('click', resumeAudio);
+        };
+        
+        window.addEventListener('click', resumeAudio, { once: true });
+        
+        // Also try to resume when the call is accepted
+        if (onAcceptCall) {
+          onAcceptCall().then(() => {
+            try { track.play(); } catch (_) {}
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error setting up remote audio:', error);
+      toast.error('Could not set up audio. Please check your audio settings.');
     }
   };
   const remoteVideoRef = useRef(null);
@@ -70,23 +100,42 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const preflightAndCreateTracks = async () => {
     const client = clientRef.current;
     if (!client) return;
-    // First attempt
+    
+    // First, ensure we have audio permissions
+    try {
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tempStream.getTracks().forEach(track => track.stop());
+    } catch (error) {
+      console.warn('Audio permission not granted:', error);
+      toast.error('Microphone access is required for audio calls. Please allow microphone access and try again.');
+    }
+
     let micTrack = null;
     let camTrack = null;
-    try { 
+    
+    // Create audio track with better error handling
+    try {
       micTrack = await AgoraRTC.createMicrophoneAudioTrack({
-        AEC: true,
-        ANS: true,
-        AGC: true,
+        AEC: true,  // Acoustic Echo Cancellation
+        ANS: true,  // Automatic Noise Suppression
+        AGC: true,  // Automatic Gain Control
         encoderConfig: 'music_standard'
       });
+      
       if (micTrack) {
-        try { await micTrack.setEnabled(true); } catch (_) {}
-        try { await micTrack.setVolume?.(100); } catch (_) {}
-        console.log('Microphone track ready with audio enhancements');
+        try { 
+          await micTrack.setEnabled(true);
+          await micTrack.setVolume(100);
+          console.log('Microphone track created and enabled');
+        } catch (e) {
+          console.error('Failed to configure microphone:', e);
+          toast.error('Could not configure microphone. Please check your audio settings.');
+        }
       }
     } catch (e) {
-      console.warn('Failed to create microphone track:', e);
+      console.error('Failed to create microphone track:', e);
+      toast.error('Could not access microphone. Please check your audio settings and permissions.');
+      return;
     }
     // Low-latency camera config (240p@24fps motion)
     const cfg = { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 };
@@ -882,6 +931,81 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                 }`}
               >
                 {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+              </button>
+
+              <button
+                onClick={async () => {
+                  const { audio } = localTracksRef.current;
+                  if (audio) {
+                    try {
+                      await audio.setEnabled(!isMuted);
+                      setIsMuted(!isMuted);
+                    } catch (e) {
+                      console.error('Error toggling mute:', e);
+                    }
+                  }
+                }}
+                className={`p-3 rounded-full ${isMuted ? 'bg-red-500' : 'bg-gray-600 hover:bg-gray-700'} text-white transition-colors`}
+                title={isMuted ? 'Unmute' : 'Mute'}
+              >
+                {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+              </button>
+
+              <button
+                onClick={async () => {
+                  try {
+                    const client = clientRef.current;
+                    const { audio } = localTracksRef.current;
+                    
+                    // Stop and remove existing audio track
+                    if (audio) {
+                      try {
+                        if (client) {
+                          await client.unpublish([audio]);
+                        }
+                        audio.close();
+                      } catch (e) {
+                        console.warn('Error removing old audio track:', e);
+                      }
+                      localTracksRef.current.audio = null;
+                    }
+                    
+                    // Create and publish new audio track
+                    try {
+                      const newAudio = await AgoraRTC.createMicrophoneAudioTrack({
+                        AEC: true,
+                        ANS: true,
+                        AGC: true,
+                        encoderConfig: 'music_standard'
+                      });
+                      
+                      if (newAudio) {
+                        await newAudio.setEnabled(true);
+                        await newAudio.setVolume(100);
+                        
+                        if (client) {
+                          await client.publish([newAudio]);
+                        }
+                        
+                        localTracksRef.current.audio = newAudio;
+                        setIsMuted(false);
+                        toast.success('Microphone reconnected');
+                      }
+                    } catch (e) {
+                      console.error('Failed to create new audio track:', e);
+                      toast.error('Could not reconnect microphone. Please check permissions.');
+                    }
+                  } catch (error) {
+                    console.error('Error in audio retry:', error);
+                    toast.error('Failed to fix audio. Please try again.');
+                  }
+                }}
+                className="p-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                title="Retry Audio"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                </svg>
               </button>
 
               <button
