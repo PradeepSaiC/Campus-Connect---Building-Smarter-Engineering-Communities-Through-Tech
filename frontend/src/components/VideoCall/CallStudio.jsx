@@ -139,11 +139,8 @@ const CallStudio = () => {
 
         // Prefer VP9 for screen/text clarity when supported (Chrome/Edge). Safari sticks to h264.
         // Optimize for low latency
-        const ua = (navigator.userAgent || '').toLowerCase();
-        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-        
-        // Use VP9 for Chrome/Edge, H264 for Safari/Firefox
-        const codec = (ua.includes('chrome') || ua.includes('edg/')) && !isSafari ? 'vp9' : 'h264';
+        // Cross-browser safest codec (Chrome/Edge/Firefox/Safari)
+        const codec = 'h264';
         
         // Create client with optimized settings for low latency
         const client = AgoraRTC.createClient({ 
@@ -159,15 +156,15 @@ const CallStudio = () => {
             sampleRate: 48000,
             codec: 'aac'
           },
-          // Optimize video codec settings
+          // Conservative video for reliability across browsers
           videoEncoderConfiguration: {
-            width: 1280,
-            height: 720,
-            frameRate: 30,
-            bitrateMax: 1200,
-            bitrateMin: 300,
+            width: 960,
+            height: 540,
+            frameRate: 24,
+            bitrateMax: 900,
+            bitrateMin: 280,
             degradationPreference: 'maintain-framerate',
-            codec: codec === 'vp9' ? 'vp9' : 'h264'
+            codec: 'h264'
           }
         });
         
@@ -203,19 +200,32 @@ const CallStudio = () => {
           console.warn('Error optimizing client settings:', error);
         }
 
+        const safePlayAudio = async (track) => {
+          if (!track) return;
+          try { await track.setEnabled(true); } catch (_) {}
+          try { await track.setVolume?.(100); } catch (_) {}
+          try { await track.play(); }
+          catch (e) {
+            // Autoplay may be blocked; resume on first user gesture
+            const resume = () => { try { track.play(); } catch (_) {} window.removeEventListener('click', resume); };
+            window.addEventListener('click', resume, { once: true });
+          }
+        };
+
         client.on('user-published', async (user, mediaType) => {
           try { await client.subscribe(user, mediaType); } catch (_) { return; }
           const uid = String(user.uid || '');
           const prev = remoteUsersRef.current.get(uid) || {};
           if (mediaType === 'video') {
-            // Prefer high stream for clarity during screen share; disable fallback to avoid resolution switches
             try { await client.setStreamFallbackOption?.(user, 0); } catch (_) {}
             remoteUsersRef.current.set(uid, { ...prev, videoTrack: user.videoTrack, audioTrack: user.audioTrack });
             const div = ensureRemoteContainer(uid);
             if (div) playInto(user.videoTrack, div);
+            // If audio track exists alongside video, ensure it plays
+            if (user.audioTrack) { await safePlayAudio(user.audioTrack); }
           }
           if (mediaType === 'audio') {
-            try { user.audioTrack?.play(); } catch (_) {}
+            await safePlayAudio(user.audioTrack);
             remoteUsersRef.current.set(uid, { ...prev, audioTrack: user.audioTrack });
           }
         });
@@ -225,6 +235,7 @@ const CallStudio = () => {
           try {
             const { uplinkNetworkQuality, downlinkNetworkQuality } = stats;
             const screen = screenTrackRef.current;
+            const localCam = localTracks.current?.video || localTracksRef.current?.video;
             
             // Handle screen sharing optimization
             if (screen) {
@@ -247,6 +258,31 @@ const CallStudio = () => {
                   bitrateMin: 1800,
                   bitrateMax: 3000,
                   degradationPreference: 'maintain-quality'
+                });
+              }
+            }
+            
+            // Local camera quality: bump up when network is good, lower when bad
+            if (localCam && typeof localCam.setEncoderConfiguration === 'function') {
+              if (uplinkNetworkQuality <= 2) {
+                // Good uplink -> clearer video
+                await localCam.setEncoderConfiguration?.({
+                  width: 1280,
+                  height: 720,
+                  frameRate: 24,
+                  bitrateMin: 600,
+                  bitrateMax: 1400,
+                  degradationPreference: 'maintain-framerate'
+                });
+              } else if (uplinkNetworkQuality >= 4) {
+                // Poor uplink -> keep call stable
+                await localCam.setEncoderConfiguration?.({
+                  width: 640,
+                  height: 360,
+                  frameRate: 20,
+                  bitrateMin: 280,
+                  bitrateMax: 700,
+                  degradationPreference: 'maintain-framerate'
                 });
               }
             }
@@ -432,7 +468,14 @@ const CallStudio = () => {
 
         // Create local tracks (low-latency camera)
         let mic = null, cam = null;
-        try { mic = await AgoraRTC.createMicrophoneAudioTrack(); } catch (_) {}
+        try { 
+          mic = await AgoraRTC.createMicrophoneAudioTrack({
+            AEC: true,
+            ANS: true,
+            AGC: true,
+            encoderConfig: 'speech_standard'
+          }); 
+        } catch (_) {}
         try {
           cam = await AgoraRTC.createCameraVideoTrack({
             optimizationMode: 'motion',
