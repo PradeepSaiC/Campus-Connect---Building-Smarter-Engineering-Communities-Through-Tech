@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import { Toaster, toast } from 'react-hot-toast';
 import useAuthStore from '../../store/authStore.js';
+import socketService from '../../services/socket.js';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { studentAPI } from '../../services/api.js';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, Users, Plus, X } from 'lucide-react';
@@ -15,6 +16,14 @@ const CallStudio = () => {
   const isAcceptFlow = qs.get('accept') === '1';
   const prefilledChannel = qs.get('channel') || '';
   const prefilledToken = qs.get('token') || '';
+  const tokenFromStorage = (() => {
+    try {
+      const raw = localStorage.getItem('campusconnect-auth');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed?.state?.token || null;
+    } catch (_) { return null; }
+  })();
 
   const [connecting, setConnecting] = useState(true);
   const [joinStatus, setJoinStatus] = useState('Joining...');
@@ -35,6 +44,7 @@ const CallStudio = () => {
   const remoteContainersRef = useRef(new Map());
   const containerRef = useRef(null);
   const localRef = useRef(null);
+  const socketHandlerRef = useRef(null);
 
   const playInto = (track, container) => {
     if (!container) return;
@@ -64,6 +74,30 @@ const CallStudio = () => {
     }
     return div;
   };
+
+  useEffect(() => {
+    // Ensure socket is connected in the call tab so call_ended reaches this window
+    if (tokenFromStorage) {
+      socketService.connect(tokenFromStorage);
+    } else {
+      socketService.connect();
+    }
+    const handler = (payload) => {
+      // Close the tab on remote end
+      setJoinStatus('Call ended');
+      setTimeout(() => {
+        try { window.close(); } catch (_) {}
+      }, 300);
+    };
+    try {
+      socketService.socket?.on('call_ended', handler);
+      socketHandlerRef.current = handler;
+    } catch (_) {}
+    return () => {
+      try { socketService.socket?.off('call_ended', handler); } catch (_) {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callId]);
 
   useEffect(() => {
     let mounted = true;

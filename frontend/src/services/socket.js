@@ -7,6 +7,22 @@ class SocketService {
     this.isConnected = false;
     this.currentRooms = new Set();
     this.lastToken = null;
+    this._playTick = () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.18);
+      } catch (_) {}
+    };
   }
 
   connect(token) {
@@ -95,6 +111,15 @@ class SocketService {
         const currentCount = unreadCounts[data.chatId] || 0;
         updateUnreadCount(data.chatId, currentCount + 1);
       }
+      // Lightweight notification with a single tick sound
+      this._playTick();
+      try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          const title = data?.message?.senderName || 'New message';
+          const body = data?.message?.content || 'You have a new message';
+          new Notification(title, { body });
+        }
+      } catch (_) {}
     });
 
     // Presence snapshots and deltas
