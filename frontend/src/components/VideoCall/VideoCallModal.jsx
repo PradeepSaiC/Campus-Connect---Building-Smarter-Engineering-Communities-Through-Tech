@@ -516,62 +516,78 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       }
       setIsConnecting(true);
       
-// Create and configure client
-      const initClient = async () => {
-        try {
-          // Get Agora App ID
-          const cred = await videoCallAPI.getCredentials();
-          const appId = cred?.data?.appId;
-          if (!appId) {
-            throw new Error('Agora App ID not configured');
-          }
+      // Main initialization function
+      const initializeCall = async () => {
+        // Create and configure client
+        const initClient = async () => {
+          try {
+            // Get Agora App ID
+            const cred = await videoCallAPI.getCredentials();
+            const appId = cred?.data?.appId;
+            if (!appId) {
+              throw new Error('Agora App ID not configured');
+            }
 
-          // Create client with optimized settings
-          const client = AgoraRTC.createClient({ 
-            mode: 'rtc', 
-            codec: 'h264',
-            audio: {
-              AEC: true,      // Acoustic Echo Cancellation
-              ANS: true,      // Automatic Noise Suppression
-              AGC: true,      // Automatic Gain Control
-              codec: 'aac',
-              sampleRate: 48000,
-              channelCount: 1,
-              bitrate: 64,    // 64kbps for better voice quality
-              stereo: false,
-              audioProcessing: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-              }
-            },
-            // Optimized WebRTC configuration
-            websocketRetryConfig: {
-              timeout: 2000,
-              timeoutFactor: 1.5,
-              maxRetryCount: 3
-            },
-            // ICE servers for better NAT traversal
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
-            ]
-          });
+            // Create client with optimized settings
+            const client = AgoraRTC.createClient({ 
+              mode: 'rtc', 
+              codec: 'h264',
+              audio: {
+                AEC: true,      // Acoustic Echo Cancellation
+                ANS: true,      // Automatic Noise Suppression
+                AGC: true,      // Automatic Gain Control
+                codec: 'aac',
+                sampleRate: 48000,
+                channelCount: 1,
+                bitrate: 64,    // 64kbps for better voice quality
+                stereo: false,
+                audioProcessing: {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true
+                }
+              },
+              // Optimized WebRTC configuration
+              websocketRetryConfig: {
+                timeout: 2000,
+                timeoutFactor: 1.5,
+                maxRetryCount: 3
+              },
+              // ICE servers for better NAT traversal
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+              ]
+            });
+            
+            clientRef.current = client;
+            return client;
+          } catch (error) {
+            console.error('Failed to initialize client:', error);
+            toast.error('Failed to initialize video call. Please try again.');
+            setIsConnecting(false);
+            return null;
+          }
+        };
+
+        try {
+          // Initialize client and continue with setup
+          const client = await initClient();
+          if (!client) return;
           
-          clientRef.current = client;
-          return client;
+          // Rest of the initialization code will go here
+          // (The code that was after the client initialization)
+          
         } catch (error) {
-          console.error('Failed to initialize client:', error);
-          toast.error('Failed to initialize video call. Please try again.');
+          console.error('Call initialization failed:', error);
+          toast.error('Failed to start video call. Please try again.');
           setIsConnecting(false);
-          return null;
         }
       };
-
-      // Initialize client and continue with setup
-      const client = await initClient();
-      if (!client) return;
+      
+      // Start the initialization
+      initializeCall();
 
       // Configure audio and video settings
       try {
