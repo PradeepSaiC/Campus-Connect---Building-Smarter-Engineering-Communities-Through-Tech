@@ -38,76 +38,125 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   // Initialize audio context with error handling
   const initAudioContext = async () => {
     try {
+      // Check if we're in a browser environment
+      if (typeof window === 'undefined') return null;
+      
       if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
-          latencyHint: 'interactive',
-          sampleRate: 48000
-        });
+        // Create audio context with better error handling
+        try {
+          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
+            latencyHint: 'interactive',
+            sampleRate: 48000
+          });
+          console.log('AudioContext created successfully');
+        } catch (error) {
+          console.error('Failed to create AudioContext:', error);
+          toast.error('Your browser does not support Web Audio API. Audio may not work correctly.');
+          return null;
+        }
       }
+      
+      // Resume audio context if suspended
       if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
+        try {
+          await audioContextRef.current.resume();
+          console.log('AudioContext resumed successfully');
+        } catch (error) {
+          console.error('Failed to resume AudioContext:', error);
+          toast.error('Could not initialize audio. Please interact with the page first.');
+          return null;
+        }
       }
+      
       return audioContextRef.current;
     } catch (error) {
-      console.error('Failed to initialize audio context:', error);
+      console.error('Error in initAudioContext:', error);
       return null;
     }
   };
   
   const playRemoteAudio = async (track) => {
-    if (!track) return;
+    if (!track) {
+      console.warn('No audio track provided to playRemoteAudio');
+      return;
+    }
     
     try {
-      // Initialize audio context if not already done
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      
-      // Resume audio context if suspended
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
+      console.log('Initializing audio context for remote track');
+      const audioContext = await initAudioContext();
+      if (!audioContext) {
+        console.error('Could not initialize audio context');
+        return;
       }
 
-      // First ensure the track is enabled
-      await track.setEnabled(true);
-      
-      // Set volume to maximum
-      if (typeof track.setVolume === 'function') {
-        await track.setVolume(100);
+      // Ensure track is enabled
+      try {
+        await track.setEnabled(true);
+        console.log('Audio track enabled');
+      } catch (e) {
+        console.error('Failed to enable audio track:', e);
       }
       
-      // Try to play the track
-      try {
-        await track.play();
-        console.log('Remote audio track is playing');
-      } catch (playError) {
-        console.warn('Auto-play prevented, waiting for user interaction:', playError);
-        
-        // Set up a one-time click handler to resume audio
-        const resumeAudio = async () => {
-          try {
-            await audioContextRef.current.resume();
-            await track.play();
-            console.log('Resumed audio after user interaction');
-          } catch (e) {
-            console.error('Failed to resume audio:', e);
-            toast.error('Could not play audio. Please check your audio output device.');
-          }
-          window.removeEventListener('click', resumeAudio);
-        };
-        
-        window.addEventListener('click', resumeAudio, { once: true });
-        
-        // Also try to resume when the call is accepted
-        if (onAcceptCall) {
-          onAcceptCall().then(async () => {
-            try { 
-              await audioContextRef.current.resume();
-              await track.play(); 
-            } catch (_) {}
-          });
+      // Set volume to maximum if supported
+      if (typeof track.setVolume === 'function') {
+        try {
+          await track.setVolume(100);
+          console.log('Audio volume set to 100%');
+        } catch (e) {
+          console.warn('Could not set audio volume:', e);
         }
       }
+      
+      // Try to play the track with retry mechanism
+      const playWithRetry = async (retryCount = 0) => {
+        try {
+          await track.play();
+          console.log('Audio track is playing successfully');
+          return true;
+        } catch (playError) {
+          console.warn(`Audio play failed (attempt ${retryCount + 1}/3):`, playError);
+          
+          if (retryCount < 2) {
+            // Wait before retrying
+            await new Promise(resolve => setTimeout(resolve, 500));
+            return playWithRetry(retryCount + 1);
+          }
+          
+          // If we've exhausted retries, try one last time after resuming audio context
+          try {
+            if (audioContext.state === 'suspended') {
+              await audioContext.resume();
+            }
+            await track.play();
+            console.log('Audio track started after final resume attempt');
+            return true;
+          } catch (finalError) {
+            console.error('Final audio play attempt failed:', finalError);
+            toast.error('Could not play audio. Please check your audio settings and ensure your browser has permission to play audio.');
+            return false;
+          }
+        }
+      };
+      
+      // Start the playback with retry
+      await playWithRetry();
+      
+      // Set up a one-time click handler to resume audio if needed
+      const handleUserInteraction = async () => {
+        try {
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+          if (track.isPlaying === false) {
+            await track.play();
+          }
+          window.removeEventListener('click', handleUserInteraction);
+        } catch (e) {
+          console.error('Failed to resume audio on user interaction:', e);
+        }
+      };
+      
+      window.addEventListener('click', handleUserInteraction, { once: true });
     } catch (error) {
       console.error('Error setting up remote audio:', error);
       toast.error('Could not set up audio. Please check your audio settings.');
@@ -140,26 +189,52 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const toggleMicrophone = async () => {
     try {
       const audioTrack = localTracksRef.current?.audio;
-      if (!audioTrack) return;
-      
-      const newState = !isAudioEnabled;
-      
-      // If enabling, make sure audio context is active
-      if (newState && audioContextRef.current?.state === 'suspended') {
-        await audioContextRef.current.resume();
+      if (!audioTrack) {
+        console.warn('No audio track available to toggle');
+        return;
       }
       
-      // Toggle the track
-      await audioTrack.setEnabled(newState);
-      setIsAudioEnabled(newState);
+      const newState = !isAudioEnabled;
+      console.log(`Toggling microphone to: ${newState ? 'ON' : 'OFF'}`);
       
-      // If we're enabling, ensure the track is properly published
-      if (newState && clientRef.current) {
-        try {
-          await clientRef.current.publish(audioTrack);
-        } catch (publishError) {
-          console.warn('Could not republish audio track:', publishError);
+      try {
+        // If enabling, make sure we have permissions and audio context is active
+        if (newState) {
+          // Request microphone permissions if not already granted
+          const permissionResult = await navigator.permissions.query({ name: 'microphone' });
+          if (permissionResult.state === 'denied') {
+            toast.error('Microphone access is denied. Please check your browser permissions.');
+            return;
+          }
+          
+          // Initialize audio context
+          const audioContext = await initAudioContext();
+          if (!audioContext) {
+            toast.error('Could not initialize audio. Please check your audio settings.');
+            return;
+          }
         }
+        
+        // Toggle the track
+        await audioTrack.setEnabled(newState);
+        setIsAudioEnabled(newState);
+        
+        // If we're enabling, ensure the track is properly published
+        if (newState && clientRef.current) {
+          try {
+            await clientRef.current.publish(audioTrack);
+            console.log('Audio track published successfully');
+          } catch (publishError) {
+            console.error('Could not publish audio track:', publishError);
+            toast.error('Failed to enable microphone. Please check your audio settings.');
+            // Revert the state if publish fails
+            await audioTrack.setEnabled(false);
+            setIsAudioEnabled(false);
+          }
+        }
+      } catch (error) {
+        console.error('Error in toggleMicrophone:', error);
+        toast.error('Failed to toggle microphone. Please check your audio settings.');
       }
     } catch (error) {
       console.error('Error toggling microphone:', error);
