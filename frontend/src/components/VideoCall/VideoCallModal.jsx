@@ -998,12 +998,31 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       if (document.visibilityState === 'visible') {
         const { video } = localTracksRef.current;
         try {
-          if (video) await video.setEnabled(true);
-        } catch (_) {}
+          if (video) {
+            await video.setEnabled(true);
+          }
+        } catch (e) {
+          console.warn('Failed to resume video:', e);
+        }
       }
     };
+    
+    // Initialize audio context when component mounts
+    const init = async () => {
+      try {
+        await initAudioContext();
+      } catch (e) {
+        console.warn('Failed to initialize audio context:', e);
+      }
+    };
+    
+    init();
+    
+    // Set up visibility change listener
     document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   useEffect(() => {
