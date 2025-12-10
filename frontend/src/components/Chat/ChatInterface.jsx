@@ -65,30 +65,6 @@ const ChatInterface = function() {
     fetchChats();
   }, []);
 
-  // Listen for profile updates to refresh chat participants
-  useEffect(() => {
-    const handleProfileUpdate = () => {
-      // Refresh chats when profile is updated
-      fetchChats();
-      // If current chat is open, refresh messages to get updated sender photos
-      if (currentChat) {
-        fetchMessages(currentChat._id);
-      }
-    };
-    window.addEventListener('user_profile_updated', handleProfileUpdate);
-    // Also listen to socket events for profile updates
-    const s = socketService.socket;
-    if (s) {
-      s.on('user_profile_updated', handleProfileUpdate);
-    }
-    return () => {
-      window.removeEventListener('user_profile_updated', handleProfileUpdate);
-      if (s) {
-        s.off('user_profile_updated', handleProfileUpdate);
-      }
-    };
-  }, [currentChat]);
-
   // Allow other components to ask Chat to open a specific user chat
   useEffect(() => {
     const handler = async (e) => {
@@ -363,12 +339,6 @@ const ChatInterface = function() {
 
   // Desktop notification for new incoming messages
   const lastMessageIdRef = useRef(null);
-  const openChatWithUser = (userId) => {
-    try {
-      window.dispatchEvent(new CustomEvent('open_chat_with', { detail: { userId } }));
-    } catch (_) {}
-  };
-
   useEffect(() => {
     if (!currentChat || !Array.isArray(messages) || messages.length === 0) return;
     if (suppressNotifyRef.current) { suppressNotifyRef.current = false; return; }
@@ -378,39 +348,8 @@ const ChatInterface = function() {
     const isOwn = last?.sender?._id === user.id;
     if (isOwn) return;
     const senderName = last?.sender?.name || 'New message';
-    const preview = String(last?.content || '').slice(0, 80) || 'Sent an attachment';
-    toast.custom((t) => (
-      <div
-        className="pointer-events-auto bg-white text-gray-900 p-4 rounded-lg shadow-lg flex items-center gap-3 border border-gray-200 min-w-[280px]"
-      >
-        <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 flex items-center justify-center flex-shrink-0">
-          {last?.sender?.photoURL ? (
-            <img
-              src={last.sender.photoURL}
-              alt={senderName}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <span className="text-sm font-semibold text-primary-600">
-              {senderName?.charAt(0)?.toUpperCase() || 'U'}
-            </span>
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold truncate">{senderName}</div>
-          <div className="text-xs text-gray-600 truncate">{preview}</div>
-        </div>
-        <button
-          onClick={() => {
-            openChatWithUser(last?.sender?._id);
-            try { toast.dismiss(t.id); } catch (_) {}
-          }}
-          className="px-3 py-1.5 bg-primary-600 text-white text-xs rounded shadow hover:bg-primary-700"
-        >
-          View
-        </button>
-      </div>
-    ), { id: `msg_${last._id}`, duration: 6000, position: 'top-right' });
+    const preview = String(last?.content || '').slice(0, 80);
+    notify.info(preview || 'New message', { key: `msg_${last._id}`, ttlMs: 4000, desktop: true, title: `Message from ${senderName}` });
   }, [messages, currentChat, user.id]);
 
   const getOtherParticipant = (chat) => {
@@ -478,18 +417,10 @@ const ChatInterface = function() {
                 >
                   <div className="flex items-center space-x-3">
                     <div className="relative">
-                      <div className="w-12 h-12 bg-base-300 rounded-full flex items-center justify-center overflow-hidden">
-                        {otherParticipant?.photoURL ? (
-                          <img
-                            src={otherParticipant.photoURL}
-                            alt={otherParticipant?.name || 'User'}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <span className="text-primary-600 font-medium">
-                            {otherParticipant?.name?.charAt(0)?.toUpperCase() || 'U'}
-                          </span>
-                        )}
+                      <div className="w-12 h-12 bg-base-300 rounded-full flex items-center justify-center">
+                        <span className="text-primary-600 font-medium">
+                          {otherParticipant?.name?.charAt(0)}
+                        </span>
                       </div>
                       {isOnline && (
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-base-100"></div>
@@ -528,18 +459,10 @@ const ChatInterface = function() {
             {/* Chat Header */}
             <div className="p-4 border-b border-base-200 flex items-center justify-between bg-base-100">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-base-300 rounded-full flex items-center justify-center overflow-hidden">
-                  {getOtherParticipant(currentChat)?.photoURL ? (
-                    <img
-                      src={getOtherParticipant(currentChat).photoURL}
-                      alt={getOtherParticipant(currentChat)?.name || 'User'}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-primary-600 font-medium">
-                      {getOtherParticipant(currentChat)?.name?.charAt(0)?.toUpperCase() || 'U'}
-                    </span>
-                  )}
+                <div className="w-10 h-10 bg-base-300 rounded-full flex items-center justify-center">
+                  <span className="text-primary-600 font-medium">
+                    {getOtherParticipant(currentChat)?.name?.charAt(0)}
+                  </span>
                 </div>
                 <div>
                   <h3 className="font-medium">
@@ -590,23 +513,8 @@ const ChatInterface = function() {
                   return (
                     <div
                       key={message._id}
-                      className={`flex message-bubble ${isOwnMessage ? 'message-own' : 'message-other'} items-end gap-2`}
+                      className={`flex message-bubble ${isOwnMessage ? 'message-own' : 'message-other'}`}
                     >
-                      {!isOwnMessage && (
-                        <div className="w-8 h-8 bg-base-300 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
-                          {message.sender?.photoURL ? (
-                            <img
-                              src={message.sender.photoURL}
-                              alt={message.sender?.name || 'User'}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <span className="text-xs font-medium text-primary-600">
-                              {message.sender?.name?.charAt(0)?.toUpperCase() || 'U'}
-                            </span>
-                          )}
-                        </div>
-                      )}
                       <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-2xl shadow-sm ${
                         isOwnMessage
                           ? 'message-bubble-own'
@@ -630,21 +538,6 @@ const ChatInterface = function() {
                           )}
                         </div>
                       </div>
-                      {isOwnMessage && (
-                        <div className="w-8 h-8 bg-base-300 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
-                          {user?.photoURL ? (
-                            <img
-                              src={user.photoURL}
-                              alt={user?.name || 'You'}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <span className="text-xs font-medium text-primary-600">
-                              {user?.name?.charAt(0)?.toUpperCase() || 'U'}
-                            </span>
-                          )}
-                        </div>
-                      )}
                     </div>
                   );
                 })

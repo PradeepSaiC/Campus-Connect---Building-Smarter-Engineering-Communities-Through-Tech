@@ -3,7 +3,6 @@ import { useParams } from 'react-router-dom';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import { Toaster, toast } from 'react-hot-toast';
 import useAuthStore from '../../store/authStore.js';
-import socketService from '../../services/socket.js';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { studentAPI } from '../../services/api.js';
 import { Mic, MicOff, Video as VideoIcon, VideoOff, Users, Plus, X } from 'lucide-react';
@@ -14,16 +13,6 @@ const CallStudio = () => {
   const qs = new URLSearchParams(window.location.search);
   const isCaller = qs.get('caller') === '1';
   const isAcceptFlow = qs.get('accept') === '1';
-  const prefilledChannel = qs.get('channel') || '';
-  const prefilledToken = qs.get('token') || '';
-  const tokenFromStorage = (() => {
-    try {
-      const raw = localStorage.getItem('campusconnect-auth');
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      return parsed?.state?.token || null;
-    } catch (_) { return null; }
-  })();
 
   const [connecting, setConnecting] = useState(true);
   const [joinStatus, setJoinStatus] = useState('Joining...');
@@ -44,8 +33,6 @@ const CallStudio = () => {
   const remoteContainersRef = useRef(new Map());
   const containerRef = useRef(null);
   const localRef = useRef(null);
-  const socketHandlerRef = useRef(null);
-  const ensureMicTimerRef = useRef(null);
 
   const playInto = (track, container) => {
     if (!container) return;
@@ -77,54 +64,26 @@ const CallStudio = () => {
   };
 
   useEffect(() => {
-    // Ensure socket is connected in the call tab so call_ended reaches this window
-    if (tokenFromStorage) {
-      socketService.connect(tokenFromStorage);
-    } else {
-      socketService.connect();
-    }
-    const handler = (payload) => {
-      // Close the tab on remote end
-      setJoinStatus('Call ended');
-      setTimeout(() => {
-        try { window.close(); } catch (_) {}
-      }, 300);
-    };
-    try {
-      socketService.socket?.on('call_ended', handler);
-      socketHandlerRef.current = handler;
-    } catch (_) {}
-    return () => {
-      try { socketService.socket?.off('call_ended', handler); } catch (_) {}
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [callId]);
-
-  useEffect(() => {
     let mounted = true;
-    let callEndedHandler = null;
     (async () => {
       try {
         const cred = await videoCallAPI.getCredentials();
         const appId = cred?.data?.appId;
         if (!appId) throw new Error('Agora App ID missing');
         // Acquire call credentials
-        let channelName = prefilledChannel || null;
-        let token = prefilledToken || null;
-        let uidFromServer = null;
-        let tries = 0;
+        let channelName = null, token = null, uidFromServer = null, tries = 0;
         if (isAcceptFlow && !isCaller) {
           // If opened via Accept button, fetch receiver-specific credentials first
           try {
             setJoinStatus('Joining...');
             const acc = await videoCallAPI.acceptCall(callId);
-            channelName = channelName || acc?.data?.channelName || acc?.data?.channel || null;
-            token = token || acc?.data?.token || null;
+            channelName = acc?.data?.channelName || channelName;
+            token = acc?.data?.token || token;
             uidFromServer = acc?.data?.uid || acc?.data?.account || uidFromServer;
           } catch (_) {}
         }
         // If still missing, poll shared credentials until ready
-        while (tries < 10 && (!channelName || !token)) {
+        while (tries < 15 && (!channelName || !token)) {
           try {
             const callCred = await videoCallAPI.getCallCredentials(callId);
             channelName = callCred?.data?.channelName || channelName;
@@ -133,15 +92,18 @@ const CallStudio = () => {
             if (channelName && token) break;
           } catch (_) {}
           setJoinStatus('Joining...');
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 800));
           tries += 1;
         }
         if (!channelName || !token) throw new Error('Call credentials missing');
 
         // Prefer VP9 for screen/text clarity when supported (Chrome/Edge). Safari sticks to h264.
         // Optimize for low latency
-        // Cross-browser safest codec (Chrome/Edge/Firefox/Safari)
-        const codec = 'h264';
+        const ua = (navigator.userAgent || '').toLowerCase();
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        
+        // Use VP9 for Chrome/Edge, H264 for Safari/Firefox
+        const codec = (ua.includes('chrome') || ua.includes('edg/')) && !isSafari ? 'vp9' : 'h264';
         
         // Create client with optimized settings for low latency
         const client = AgoraRTC.createClient({ 
@@ -157,15 +119,15 @@ const CallStudio = () => {
             sampleRate: 48000,
             codec: 'aac'
           },
-          // Conservative video for reliability across browsers
+          // Optimize video codec settings
           videoEncoderConfiguration: {
-            width: 960,
-            height: 540,
-            frameRate: 24,
-            bitrateMax: 900,
-            bitrateMin: 280,
+            width: 1280,
+            height: 720,
+            frameRate: 30,
+            bitrateMax: 1200,
+            bitrateMin: 300,
             degradationPreference: 'maintain-framerate',
-            codec: 'h264'
+            codec: codec === 'vp9' ? 'vp9' : 'h264'
           }
         });
         
@@ -201,32 +163,19 @@ const CallStudio = () => {
           console.warn('Error optimizing client settings:', error);
         }
 
-        const safePlayAudio = async (track) => {
-          if (!track) return;
-          try { await track.setEnabled(true); } catch (_) {}
-          try { await track.setVolume?.(100); } catch (_) {}
-          try { await track.play(); }
-          catch (e) {
-            // Autoplay may be blocked; resume on first user gesture
-            const resume = () => { try { track.play(); } catch (_) {} window.removeEventListener('click', resume); };
-            window.addEventListener('click', resume, { once: true });
-          }
-        };
-
         client.on('user-published', async (user, mediaType) => {
           try { await client.subscribe(user, mediaType); } catch (_) { return; }
           const uid = String(user.uid || '');
           const prev = remoteUsersRef.current.get(uid) || {};
           if (mediaType === 'video') {
+            // Prefer high stream for clarity during screen share; disable fallback to avoid resolution switches
             try { await client.setStreamFallbackOption?.(user, 0); } catch (_) {}
             remoteUsersRef.current.set(uid, { ...prev, videoTrack: user.videoTrack, audioTrack: user.audioTrack });
             const div = ensureRemoteContainer(uid);
             if (div) playInto(user.videoTrack, div);
-            // If audio track exists alongside video, ensure it plays
-            if (user.audioTrack) { await safePlayAudio(user.audioTrack); }
           }
           if (mediaType === 'audio') {
-            await safePlayAudio(user.audioTrack);
+            try { user.audioTrack?.play(); } catch (_) {}
             remoteUsersRef.current.set(uid, { ...prev, audioTrack: user.audioTrack });
           }
         });
@@ -236,7 +185,6 @@ const CallStudio = () => {
           try {
             const { uplinkNetworkQuality, downlinkNetworkQuality } = stats;
             const screen = screenTrackRef.current;
-            const localCam = localTracks.current?.video || localTracksRef.current?.video;
             
             // Handle screen sharing optimization
             if (screen) {
@@ -259,31 +207,6 @@ const CallStudio = () => {
                   bitrateMin: 1800,
                   bitrateMax: 3000,
                   degradationPreference: 'maintain-quality'
-                });
-              }
-            }
-            
-            // Local camera quality: bump up when network is good, lower when bad
-            if (localCam && typeof localCam.setEncoderConfiguration === 'function') {
-              if (uplinkNetworkQuality <= 2) {
-                // Good uplink -> clearer video
-                await localCam.setEncoderConfiguration?.({
-                  width: 1280,
-                  height: 720,
-                  frameRate: 24,
-                  bitrateMin: 600,
-                  bitrateMax: 1400,
-                  degradationPreference: 'maintain-framerate'
-                });
-              } else if (uplinkNetworkQuality >= 4) {
-                // Poor uplink -> keep call stable
-                await localCam.setEncoderConfiguration?.({
-                  width: 640,
-                  height: 360,
-                  frameRate: 20,
-                  bitrateMin: 280,
-                  bitrateMax: 700,
-                  degradationPreference: 'maintain-framerate'
                 });
               }
             }
@@ -332,45 +255,21 @@ const CallStudio = () => {
           }
         });
 
-        // Re-publish on reconnect and recreate mic if missing
-        client.on('connection-state-change', async (curState) => {
-          if (curState !== 'CONNECTED') return;
-          try {
-            const c = clientRef.current;
-            let { audio, video } = localTracksRef.current;
-            if (!audio) {
-              try {
-                audio = await AgoraRTC.createMicrophoneAudioTrack({
-                  AEC: true,
-                  ANS: true,
-                  AGC: true,
-                  encoderConfig: 'speech_standard'
-                });
-                try { await audio.setEnabled(true); } catch (_) {}
-                try { await audio.setVolume?.(100); } catch (_) {}
-                localTracksRef.current.audio = audio;
-                localTracks.current.audio = audio;
-              } catch (e) {
-                console.warn('[CALL] mic recreate on reconnect failed', e);
-              }
-            }
-            const toPublish = [];
-            if (audio) toPublish.push(audio);
-            if (video) toPublish.push(video);
-            if (c && toPublish.length) {
-              try { await c.publish(toPublish); } catch (e) { console.warn('[CALL] republish failed', e); }
-            }
-          } catch (_) {}
-        });
-
         // Handle call ended event from server
-        callEndedHandler = () => {
+        const handleCallEnded = (event) => {
           toast.success('Call ended by other participant');
           setTimeout(() => {
             try { window.close(); } catch (_) {}
           }, 1000);
         };
-        window.addEventListener('call_ended', callEndedHandler);
+        
+        // Add event listener for call_ended
+        window.addEventListener('call_ended', handleCallEnded);
+        
+        // Clean up event listener
+        return () => {
+          window.removeEventListener('call_ended', handleCallEnded);
+        };
 
         // Use the same UID/account the backend signed into the token.
         const joinUid = uidFromServer || String(user?.id || user?._id || '');
@@ -500,18 +399,7 @@ const CallStudio = () => {
 
         // Create local tracks (low-latency camera)
         let mic = null, cam = null;
-        try { 
-          mic = await AgoraRTC.createMicrophoneAudioTrack({
-            AEC: true,
-            ANS: true,
-            AGC: true,
-            encoderConfig: 'speech_standard'
-          });
-          try { await mic.setEnabled(true); } catch (_) {}
-          try { await mic.setVolume?.(100); } catch (_) {}
-        } catch (e) {
-          console.warn('[CALL] Mic create failed, will retry after join:', e);
-        }
+        try { mic = await AgoraRTC.createMicrophoneAudioTrack(); } catch (_) {}
         try {
           cam = await AgoraRTC.createCameraVideoTrack({
             optimizationMode: 'motion',
@@ -529,36 +417,6 @@ const CallStudio = () => {
         if (cam && localRef.current) playInto(cam, localRef.current);
         setConnecting(false);
         hasJoinedRef.current = true;
-
-        // Safety: ensure a mic exists/published shortly after join
-        try {
-          if (ensureMicTimerRef.current) clearTimeout(ensureMicTimerRef.current);
-        } catch (_) {}
-        ensureMicTimerRef.current = setTimeout(async () => {
-          try {
-            const c = clientRef.current;
-            let currentMic = localTracks.current.audio;
-            if (!currentMic) {
-              try {
-                currentMic = await AgoraRTC.createMicrophoneAudioTrack({
-                  AEC: true,
-                  ANS: true,
-                  AGC: true,
-                  encoderConfig: 'speech_standard'
-                });
-                try { await currentMic.setEnabled(true); } catch (_) {}
-                try { await currentMic.setVolume?.(100); } catch (_) {}
-                if (currentMic && c) {
-                  await c.publish([currentMic]);
-                  localTracks.current.audio = currentMic;
-                  console.log('[CALL] Mic republished after missing');
-                }
-              } catch (e) {
-                console.warn('[CALL] Mic ensure failed', e);
-              }
-            }
-          } catch (_) {}
-        }, 1500);
 
         // Periodic re-subscribe to mitigate drift
         const driftTimer = setInterval(async () => {
@@ -590,10 +448,6 @@ const CallStudio = () => {
         if (audio) { try { audio.stop(); audio.close(); } catch (_) {} }
         if (video) { try { video.stop(); video.close(); } catch (_) {} }
         if (c) c.leave();
-        if (callEndedHandler) {
-          window.removeEventListener('call_ended', callEndedHandler);
-        }
-        try { if (ensureMicTimerRef.current) clearTimeout(ensureMicTimerRef.current); } catch (_) {}
       } catch (_) {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

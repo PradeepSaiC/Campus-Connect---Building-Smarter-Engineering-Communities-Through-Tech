@@ -7,22 +7,6 @@ class SocketService {
     this.isConnected = false;
     this.currentRooms = new Set();
     this.lastToken = null;
-    this._playTick = () => {
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
-        gain.gain.setValueAtTime(0, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.01);
-        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.18);
-      } catch (_) {}
-    };
   }
 
   connect(token) {
@@ -110,27 +94,6 @@ class SocketService {
       if (!currentChat || currentChat._id !== data.chatId) {
         const currentCount = unreadCounts[data.chatId] || 0;
         updateUnreadCount(data.chatId, currentCount + 1);
-      }
-      // Notify only on incoming (not sent by me)
-      const myId = (() => {
-        try {
-          const raw = localStorage.getItem('campusconnect-auth');
-          if (!raw) return null;
-          const parsed = JSON.parse(raw);
-          return parsed?.state?.user?._id || parsed?.state?.user?.id || null;
-        } catch (_) { return null; }
-      })();
-      const senderId = data?.message?.senderId || data?.message?.sender?._id || data?.message?.sender;
-      const isIncoming = senderId && myId && String(senderId) !== String(myId);
-      if (isIncoming || !senderId) {
-        this._playTick();
-        try {
-          if ('Notification' in window && Notification.permission === 'granted') {
-            const title = data?.message?.senderName || 'New message';
-            const body = data?.message?.content || 'You have a new message';
-            new Notification(title, { body });
-          }
-        } catch (_) {}
       }
     });
 
