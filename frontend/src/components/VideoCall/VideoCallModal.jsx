@@ -164,7 +164,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   };
   const remoteVideoRef = useRef(null);
   const clientRef = useRef(null);
-  const localTracksRef = useRef({ audio: null, video: null });
   const durationTimerRef = useRef(null);
   const resubTimerRef = useRef(null);
   const republishTimerRef = useRef(null);
@@ -490,8 +489,12 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     getAudioDevices();
     
     // Listen for device changes
+    useEffect(() => {
       // Initialize audio context
-      await initAudioContext();
+      const init = async () => {
+        await initAudioContext();
+      };
+      init();
       
       // Add user gesture handler for audio context
       const handleUserGesture = async () => {
