@@ -516,106 +516,360 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       }
       setIsConnecting(true);
       
+      // Configure client settings
+      const configureClient = async (client) => {
+        try {
+          // Set audio profile for voice calls
+          await client.setAudioProfile('speech_standard');
+          
+          // Enable dual stream for adaptive quality
+          try {
+            await client.enableDualStream();
+            await client.setLowStreamParameter({
+              width: 160,
+              height: 90,
+              framerate: 15,
+              bitrate: 45
+            });
+          } catch (e) {
+            console.warn('Dual stream not supported:', e);
+          }
+          
+          // Set audio frame rate
+          await client.setAudioFrameRate(24);
+          
+          // Enable audio volume indicator
+          await client.enableAudioVolumeIndicator();
+          
+        } catch (e) {
+          console.warn('Could not configure client settings:', e);
+        }
+      };
+
       // Main initialization function
       const initializeCall = async () => {
-        // Create and configure client
-        const initClient = async () => {
-          try {
-            // Get Agora App ID
-            const cred = await videoCallAPI.getCredentials();
-            const appId = cred?.data?.appId;
-            if (!appId) {
-              throw new Error('Agora App ID not configured');
-            }
-
-            // Create client with optimized settings
-            const client = AgoraRTC.createClient({ 
-              mode: 'rtc', 
-              codec: 'h264',
-              audio: {
-                AEC: true,      // Acoustic Echo Cancellation
-                ANS: true,      // Automatic Noise Suppression
-                AGC: true,      // Automatic Gain Control
-                codec: 'aac',
-                sampleRate: 48000,
-                channelCount: 1,
-                bitrate: 64,    // 64kbps for better voice quality
-                stereo: false,
-                audioProcessing: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true
-                }
-              },
-              // Optimized WebRTC configuration
-              websocketRetryConfig: {
-                timeout: 2000,
-                timeoutFactor: 1.5,
-                maxRetryCount: 3
-              },
-              // ICE servers for better NAT traversal
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
-              ]
-            });
-            
-            clientRef.current = client;
-            return client;
-          } catch (error) {
-            console.error('Failed to initialize client:', error);
-            toast.error('Failed to initialize video call. Please try again.');
-            setIsConnecting(false);
-            return null;
-          }
-        };
-
         try {
-          // Initialize client and continue with setup
-          const client = await initClient();
-          if (!client) return;
+          // Get Agora App ID
+          const cred = await videoCallAPI.getCredentials();
+          const appId = cred?.data?.appId;
+          if (!appId) {
+            throw new Error('Agora App ID not configured');
+          }
+
+          // Create client with optimized settings
+          const client = AgoraRTC.createClient({ 
+            mode: 'rtc', 
+            codec: 'h264',
+            audio: {
+              AEC: true,      // Acoustic Echo Cancellation
+              ANS: true,      // Automatic Noise Suppression
+              AGC: true,      // Automatic Gain Control
+              codec: 'aac',
+              sampleRate: 48000,
+              channelCount: 1,
+              bitrate: 64,    // 64kbps for better voice quality
+              stereo: false,
+              audioProcessing: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+              }
+            },
+            // Optimized WebRTC configuration
+            websocketRetryConfig: {
+              timeout: 2000,
+              timeoutFactor: 1.5,
+              maxRetryCount: 3
+            },
+            // ICE servers for better NAT traversal
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+          });
           
-          // Rest of the initialization code will go here
-          // (The code that was after the client initialization)
+          clientRef.current = client;
+          
+          // Configure client settings
+          await configureClient(client);
+          
+          // Set up network quality monitoring
+          client.on('network-quality', (stats) => {
+            try {
+              const { downlinkNetworkQuality, uplinkNetworkQuality } = stats;
+              
+              // Adjust audio bitrate based on network quality
+              if (localTracksRef.current.audio) {
+                if (uplinkNetworkQuality > 3) { // Poor network
+                  localTracksRef.current.audio.setBitrate(32);
+                } else {
+                  localTracksRef.current.audio.setBitrate(64);
+                }
+              }
+              
+              console.log('Network quality - Downlink:', downlinkNetworkQuality, 'Uplink:', uplinkNetworkQuality);
+              
+            } catch (error) {
+              console.error('Error handling network quality:', error);
+            }
+          });
+          
+          return client;
           
         } catch (error) {
-          console.error('Call initialization failed:', error);
-          toast.error('Failed to start video call. Please try again.');
+          console.error('Failed to initialize client:', error);
+          toast.error('Failed to initialize video call. Please try again.');
           setIsConnecting(false);
+          return null;
         }
       };
       
+      // Start the call initialization
+      initializeCall().then(client => {
+        if (!client) return;
+        
+        // Set up event handlers for the call
+        const setupEventHandlers = () => {
+          // Remote user handlers with improved error handling
+          client.on('user-published', async (user, mediaType) => {
+            console.log(`User ${user.uid} published ${mediaType}`);
+            
+            try {
+              await client.subscribe(user, mediaType);
+              console.log(`Subscribed to ${mediaType} for user ${user.uid}`);
+              
+              if (mediaType === 'video') {
+                try {
+                  // Set video quality and fallback options
+                  await client.setRemoteVideoStreamType?.(user, 1); // Low quality stream
+                  await client.setStreamFallbackOption?.(user, 2);  // Auto-fallback based on network
+                  
+                  // Update remote stream state
+                  setRemoteStream(user);
+                  
+                  // Play the video track
+                  if (remoteVideoRef.current && user.videoTrack) {
+                    try {
+                      // Clear previous video if any
+                      remoteVideoRef.current.innerHTML = '';
+                      // Play with hardware acceleration and proper scaling
+                      await user.videoTrack.play(remoteVideoRef.current, { 
+                        mirror: false,
+                        fit: 'contain'
+                      });
+                      
+                      // Ensure video element has proper styling
+                      const videoElement = remoteVideoRef.current.querySelector('video');
+                      if (videoElement) {
+                        videoElement.style.width = '100%';
+                        videoElement.style.height = '100%';
+                        videoElement.style.objectFit = 'contain';
+                      }
+                      
+                      console.log('Playing video track for user:', user.uid);
+                    } catch (e) {
+                      console.error('Error playing video track:', e);
+                      toast.error('Could not display video. Trying to reconnect...');
+                    }
+                  }
+                } catch (e) {
+                  console.error('Error setting up video:', e);
+                }
+              }
+              
+              if (mediaType === 'audio') {
+                const playAudioWithRetry = async (retryCount = 0) => {
+                  try {
+                    if (user.audioTrack) {
+                      // Set volume and play
+                      await user.audioTrack.setVolume(100);
+                      await user.audioTrack.play();
+                      console.log('Playing audio track for user:', user.uid);
+                    }
+                  } catch (e) {
+                    console.error('Error playing audio track:', e);
+                    
+                    // Retry up to 3 times with exponential backoff
+                    if (retryCount < 3) {
+                      const delay = 500 * Math.pow(2, retryCount);
+                      console.log(`Retrying audio in ${delay}ms...`);
+                      setTimeout(() => playAudioWithRetry(retryCount + 1), delay);
+                    } else {
+                      toast.error('Could not start audio. Please check your audio settings.');
+                    }
+                  }
+                };
+                
+                // Start audio playback with retry
+                playAudioWithRetry();
+              }
+              
+              setParticipantCount(c => Math.max(1, c + 1));
+              
+            } catch (e) {
+              console.error(`Failed to handle ${mediaType} for user ${user.uid}:`, e);
+            }
+          });
+          
+          client.on('user-unpublished', (user, mediaType) => {
+            console.log(`User ${user.uid} unpublished ${mediaType}`);
+            
+            if (mediaType === 'video') {
+              setRemoteStream(null);
+              console.log('Cleared remote video stream');
+            }
+            
+            if (mediaType === 'audio') {
+              try { 
+                if (user.audioTrack) {
+                  console.log('Stopping audio track for user:', user.uid);
+                  user.audioTrack.stop();
+                  user.audioTrack.close();
+                }
+              } catch (e) {
+                console.warn('Error stopping audio track:', e);
+              }
+            }
+            
+            setParticipantCount(c => Math.max(1, c - 1));
+            console.log('Participant count updated');
+          });
+          
+          client.on('connection-state-change', async (curState, prevState) => {
+            console.log(`Connection state changed from ${prevState} to ${curState}`);
+            
+            if (curState === 'CONNECTED') {
+              setIsConnected(true);
+              // Re-publish local tracks after reconnect
+              const c = clientRef.current;
+              const { audio, video } = localTracksRef.current;
+              const toPublish = [];
+              if (audio) toPublish.push(audio);
+              if (video) toPublish.push(video);
+              if (c && toPublish.length) {
+                try { 
+                  await c.unpublish(toPublish); 
+                  await c.publish(toPublish); 
+                } catch (_) {}
+              }
+              
+              // Re-subscribe any remote users
+              const remotes = c?.remoteUsers || [];
+              for (const ru of remotes) {
+                try {
+                  if (ru.hasVideo) {
+                    await c.subscribe(ru, 'video');
+                    setRemoteStream(ru);
+                    if (remoteVideoRef.current) {
+                      try { 
+                        remoteVideoRef.current.innerHTML = ''; 
+                        await ru.videoTrack?.play(remoteVideoRef.current, { mirror: false });
+                      } catch (_) {}
+                    }
+                  }
+                  if (ru.hasAudio && ru.audioTrack) {
+                    await c.subscribe(ru, 'audio');
+                    try {
+                      await playRemoteAudio(ru.audioTrack);
+                    } catch (e) {
+                      console.error('Error playing remote audio on reconnect:', e);
+                    }
+                  }
+                } catch (_) {}
+              }
+            } else if (curState === 'DISCONNECTED') {
+              setIsConnected(false);
+            }
+          });
+        };
+        
+        // Set up event handlers
+        setupEventHandlers();
+        
+        // Join the channel
+        const joinChannel = async () => {
+          try {
+            const uid = String(user?.id || user?._id);
+            
+            // Set client role and enable features
+            try { await client.setClientRole?.('host'); } catch (_) {}
+            try { await client.enableAudioVolumeIndicator?.(); } catch (_) {}
+            
+            // Join the channel with retry
+            const joinWithRetry = async (attempt = 0) => {
+              try {
+                await client.join(appId, callData.channelName, callData.token || null, uid || null);
+                console.log('Successfully joined channel');
+                
+                // Start call timer
+                startCallTimer();
+                
+                // Publish local tracks
+                await preflightAndCreateTracks();
+                
+              } catch (joinError) {
+                console.error('Join error (attempt', attempt + 1, '):', joinError);
+                
+                if (attempt < 2) { // Retry up to 3 times
+                  const delay = 1000 * Math.pow(2, attempt); // Exponential backoff
+                  console.log(`Retrying join in ${delay}ms...`);
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                  return joinWithRetry(attempt + 1);
+                } else {
+                  throw joinError; // Re-throw after max retries
+                }
+              }
+            };
+            
+            await joinWithRetry();
+            
+          } catch (error) {
+            console.error('Failed to join channel:', error);
+            toast.error('Failed to join the call. Please check your connection and try again.');
+            setIsConnecting(false);
+            onClose();
+          }
+        };
+        
+        joinChannel();
+        
+      }).catch(error => {
+        console.error('Call initialization failed:', error);
+        toast.error('Failed to initialize call. Please try again.');
+        setIsConnecting(false);
+      });
+      const configureClient = async (client) => {
+        try {
+          // Set audio profile for voice calls
+          await client.setAudioProfile('speech_standard');
+          
+          // Enable dual stream for adaptive quality
+          try {
+            await client.enableDualStream();
+            await client.setLowStreamParameter({
+              width: 160,
+              height: 90,
+              framerate: 15,
+              bitrate: 45
+            });
+          } catch (e) {
+            console.warn('Dual stream not supported:', e);
+          }
+          
+          // Set audio frame rate
+          await client.setAudioFrameRate(24);
+          
+          // Enable audio volume indicator
+          await client.enableAudioVolumeIndicator();
+          
+        } catch (e) {
+          console.warn('Could not configure client settings:', e);
+        }
+      };
+
       // Start the initialization
       initializeCall();
-
-      // Configure audio and video settings
-      try {
-        // Set audio profile for voice calls
-        await client.setAudioProfile('speech_standard');
-        
-        // Enable dual stream for adaptive quality
-        try {
-          await client.enableDualStream();
-          await client.setLowStreamParameter({
-            width: 160,
-            height: 90,
-            framerate: 15,
-            bitrate: 45
-          });
-        } catch (e) {
-          console.warn('Dual stream not supported:', e);
-        }
-        
-        // Set audio frame rate
-        await client.setAudioFrameRate(24);
-        
-        // Enable audio volume indicator
-        await client.enableAudioVolumeIndicator();
-        
-      } catch (e) {
-        console.warn('Could not configure client settings:', e);
-      }
 
       // Network quality monitoring
       client.on('network-quality', (stats) => {
