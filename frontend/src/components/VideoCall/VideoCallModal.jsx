@@ -707,33 +707,40 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   };
 
   // Network quality monitoring
+  const checkNetworkQuality = useCallback(() => {
+    const client = clientRef.current;
+    if (!client) return;
+    
+    try {
+      const stats = client.getRTCStats();
+      // Simple network quality check based on packet loss and RTT
+      if (stats?.RTT > 500 || stats?.packetLossRatio > 0.1) {
+        setNetworkQuality('poor');
+        // Automatically reduce quality if network is poor
+        if (selectedQuality !== 'sd') {
+          // Use the qualityToConfig function directly instead of applyQuality to avoid circular dependencies
+          const cfg = { width: 640, height: 360, frameRate: 20, bitrateMin: 200, bitrateMax: 400 };
+          const v = localTracksRef.current.video;
+          if (v && typeof v.setEncoderConfiguration === 'function') {
+            v.setEncoderConfiguration(cfg).catch(console.error);
+          }
+          setSelectedQuality('sd');
+          try { localStorage.setItem('cc_video_quality', 'sd'); } catch (_) {}
+        }
+      } else {
+        setNetworkQuality('good');
+      }
+    } catch (e) {
+      console.warn('Error checking network quality:', e);
+    }
+  }, [selectedQuality]);
+
   useEffect(() => {
     if (!isConnected) return;
     
-    const checkNetworkQuality = () => {
-      const client = clientRef.current;
-      if (!client) return;
-      
-      try {
-        const stats = client.getRTCStats();
-        // Simple network quality check based on packet loss and RTT
-        if (stats?.RTT > 500 || stats?.packetLossRatio > 0.1) {
-          setNetworkQuality('poor');
-          // Automatically reduce quality if network is poor
-          if (selectedQuality !== 'sd') {
-            applyQuality('sd');
-          }
-        } else {
-          setNetworkQuality('good');
-        }
-      } catch (e) {
-        console.warn('Error checking network quality:', e);
-      }
-    };
-    
     const qualityInterval = setInterval(checkNetworkQuality, 5000);
     return () => clearInterval(qualityInterval);
-  }, [isConnected, selectedQuality, applyQuality]);
+  }, [isConnected, checkNetworkQuality]);
 
   const cleanupCall = useCallback(async () => {
     try {
