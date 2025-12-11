@@ -30,17 +30,50 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const localVideoRef = useRef(null);
   const playRemoteAudio = async (track) => {
     if (!track) return;
-    try { await track.setEnabled(true); } catch (_) {}
-    try { await track.setVolume?.(100); } catch (_) {}
+    
     try {
-      await track.play();
+      // First ensure the track is enabled
+      await track.setEnabled(true);
+      
+      // Set volume to 100%
+      if (typeof track.setVolume === 'function') {
+        await track.setVolume(100);
+      }
+      
+      // Create an audio element if not already playing
+      if (!track.isPlaying) {
+        try {
+          // Try to play the track
+          await track.play();
+          console.log('Audio track is now playing');
+        } catch (playError) {
+          console.warn('Audio autoplay blocked:', playError);
+          // Show a message to the user
+          toast('Click anywhere to enable audio', { 
+            icon: '🔊',
+            duration: 3000
+          });
+          
+          // Set up a one-time click handler to resume audio
+          const resumeAudio = async () => {
+            try {
+              await track.play();
+              console.log('Audio resumed after user interaction');
+            } catch (e) {
+              console.error('Failed to resume audio:', e);
+            }
+            window.removeEventListener('click', resumeAudio);
+          };
+          
+          window.addEventListener('click', resumeAudio, { once: true });
+        }
+      }
     } catch (err) {
-      console.warn('Audio autoplay blocked', err);
-      const resume = () => {
-        try { track.play(); } catch (_) {}
-        window.removeEventListener('click', resume);
-      };
-      window.addEventListener('click', resume, { once: true });
+      console.error('Error in playRemoteAudio:', err);
+      // Try to recover by recreating the audio track if possible
+      if (err.name === 'NotAllowedError' || err.name === 'NotReadableError') {
+        toast.error('Audio permission issue. Please check your browser settings.');
+      }
     }
   };
   const remoteVideoRef = useRef(null);
@@ -73,20 +106,45 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     // First attempt
     let micTrack = null;
     let camTrack = null;
+    
+    // Request audio permissions first
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Stop all tracks to release the stream
+      stream.getTracks().forEach(track => track.stop());
+    } catch (e) {
+      console.warn('Audio permission denied:', e);
+      toast.error('Microphone access is required for audio. Please allow microphone access.');
+    }
+
     try { 
       micTrack = await AgoraRTC.createMicrophoneAudioTrack({
         AEC: true,
         ANS: true,
         AGC: true,
-        encoderConfig: 'music_standard'
+        encoderConfig: 'music_standard',
+        // Force audio track to be enabled
+        enabled: true
       });
+      
       if (micTrack) {
-        try { await micTrack.setEnabled(true); } catch (_) {}
-        try { await micTrack.setVolume?.(100); } catch (_) {}
+        try { 
+          await micTrack.setEnabled(true); 
+          console.log('Microphone track enabled');
+        } catch (e) { 
+          console.error('Failed to enable microphone track:', e);
+        }
+        try { 
+          await micTrack.setVolume(100); 
+          console.log('Microphone volume set to 100%');
+        } catch (e) { 
+          console.warn('Failed to set microphone volume:', e);
+        }
         console.log('Microphone track ready with audio enhancements');
       }
     } catch (e) {
-      console.warn('Failed to create microphone track:', e);
+      console.error('Failed to create microphone track:', e);
+      toast.error('Failed to access microphone. Please check your audio settings.');
     }
     // Low-latency camera config (240p@24fps motion)
     const cfg = { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 };

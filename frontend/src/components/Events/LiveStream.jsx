@@ -55,17 +55,50 @@ const LiveStream = () => {
     const container = videoRef.current;
   const playRemoteAudio = async (track) => {
     if (!track) return;
-    try { await track.setEnabled(true); } catch (_) {}
-    try { await track.setVolume?.(100); } catch (_) {}
+    
     try {
-      await track.play();
+      // First ensure the track is enabled
+      await track.setEnabled(true);
+      
+      // Set volume to 100%
+      if (typeof track.setVolume === 'function') {
+        await track.setVolume(100);
+      }
+      
+      // Create an audio element if not already playing
+      if (!track.isPlaying) {
+        try {
+          // Try to play the track
+          await track.play();
+          console.log('[LIVE:UI] Audio track is now playing');
+        } catch (playError) {
+          console.warn('[LIVE:UI] Audio autoplay blocked:', playError);
+          // Show a message to the user
+          toast('Click anywhere to enable audio', { 
+            icon: '🔊',
+            duration: 3000
+          });
+          
+          // Set up a one-time click handler to resume audio
+          const resumeAudio = async () => {
+            try {
+              await track.play();
+              console.log('[LIVE:UI] Audio resumed after user interaction');
+            } catch (e) {
+              console.error('[LIVE:UI] Failed to resume audio:', e);
+            }
+            window.removeEventListener('click', resumeAudio);
+          };
+          
+          window.addEventListener('click', resumeAudio, { once: true });
+        }
+      }
     } catch (err) {
-      console.warn('[LIVE:UI] audio autoplay blocked', err);
-      const resume = () => {
-        try { track.play(); } catch (_) {}
-        window.removeEventListener('click', resume);
-      };
-      window.addEventListener('click', resume, { once: true });
+      console.error('[LIVE:UI] Error in playRemoteAudio:', err);
+      // Try to recover by recreating the audio track if possible
+      if (err.name === 'NotAllowedError' || err.name === 'NotReadableError') {
+        toast.error('Audio permission issue. Please check your browser settings.');
+      }
     }
   };
     if (!container || !track) return;
