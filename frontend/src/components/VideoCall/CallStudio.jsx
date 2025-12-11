@@ -6,7 +6,7 @@ import useAuthStore from '../../store/authStore.js';
 import socketService from '../../services/socket.js';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { studentAPI } from '../../services/api.js';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, Users, Plus, X } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, Users, Plus, X, Volume2, VolumeX } from 'lucide-react';
 
 const CallStudio = () => {
   const { callId } = useParams();
@@ -36,6 +36,7 @@ const CallStudio = () => {
   const [search, setSearch] = useState('');
   const [sharing, setSharing] = useState(false);
   const [cameraPrompt, setCameraPrompt] = useState({ show: false, lastError: '' });
+  const [speakerMuted, setSpeakerMuted] = useState(false);
 
   const clientRef = useRef(null);
   const localTracks = useRef({ audio: null, video: null });
@@ -75,6 +76,24 @@ const CallStudio = () => {
     return div;
   };
 
+  const setAllRemoteAudioMuted = async (muted) => {
+    const list = Array.from(remoteUsersRef.current.values());
+    for (const u of list) {
+      const t = u.audioTrack;
+      if (!t) continue;
+      try {
+        if (typeof t.setVolume === 'function') {
+          await t.setVolume(muted ? 0 : 100);
+        } else {
+          await t.setEnabled(!muted);
+        }
+      } catch (_) {}
+      if (!muted) {
+        try { await t.play(); } catch (_) {}
+      }
+    }
+  };
+
   useEffect(() => {
     // Ensure socket is connected in the call tab so call_ended reaches this window
     if (tokenFromStorage) {
@@ -93,8 +112,17 @@ const CallStudio = () => {
       socketService.socket?.on('call_ended', handler);
       socketHandlerRef.current = handler;
     } catch (_) {}
+    // Also handle rejection
+    const rejectHandler = () => {
+      setJoinStatus('Call rejected');
+      setTimeout(() => {
+        try { window.close(); } catch (_) {}
+      }, 500);
+    };
+    try { socketService.socket?.on('call_rejected', rejectHandler); } catch (_) {}
     return () => {
       try { socketService.socket?.off('call_ended', handler); } catch (_) {}
+      try { socketService.socket?.off('call_rejected', rejectHandler); } catch (_) {}
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId]);
@@ -112,6 +140,10 @@ const CallStudio = () => {
         let token = prefilledToken || null;
         let uidFromServer = null;
         let tries = 0;
+        // While waiting for accept, show Ringing
+        if (!channelName || !token) {
+          setJoinStatus('Ringing...');
+        }
         if (isAcceptFlow && !isCaller) {
           // If opened via Accept button, fetch receiver-specific credentials first
           try {
@@ -210,6 +242,7 @@ const CallStudio = () => {
             const resume = () => { try { track.play(); } catch (_) {} window.removeEventListener('click', resume); };
             window.addEventListener('click', resume, { once: true });
           }
+          try { if (typeof track.setVolume === 'function') { await track.setVolume(speakerMuted ? 0 : 100); } } catch (_) {}
         };
 
         client.on('user-published', async (user, mediaType) => {
@@ -566,6 +599,12 @@ const CallStudio = () => {
     const next = !videoOff; await t.setEnabled(!next); setVideoOff(next);
   };
 
+  const toggleSpeaker = async () => {
+    const next = !speakerMuted;
+    setSpeakerMuted(next);
+    await setAllRemoteAudioMuted(next);
+  };
+
   const toggleScreenShare = async () => {
     try {
       const client = clientRef.current;
@@ -660,6 +699,9 @@ const CallStudio = () => {
       <div className="p-3 bg-gray-900 border-t border-gray-800 flex items-center justify-center gap-3">
         <button onClick={toggleMute} className={`w-12 h-12 rounded-full flex items-center justify-center ${muted ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
           {muted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+        </button>
+        <button onClick={toggleSpeaker} className={`w-12 h-12 rounded-full flex items-center justify-center ${speakerMuted ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
+          {speakerMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
         </button>
         <button onClick={toggleVideo} className={`w-12 h-12 rounded-full flex items-center justify-center ${videoOff ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
           {videoOff ? <VideoOff className="w-6 h-6" /> : <VideoIcon className="w-6 h-6" />}

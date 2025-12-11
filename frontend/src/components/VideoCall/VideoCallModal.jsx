@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Phone, PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
+import { X, Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Volume2, VolumeX } from 'lucide-react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { toast } from 'react-hot-toast';
@@ -14,6 +14,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [speakerMuted, setSpeakerMuted] = useState(false);
   const [participantCount, setParticipantCount] = useState(1);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -31,7 +32,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const playRemoteAudio = async (track) => {
     if (!track) return;
     try { await track.setEnabled(true); } catch (_) {}
-    try { await track.setVolume?.(100); } catch (_) {}
+    try { await track.setVolume?.(speakerMuted ? 0 : 100); } catch (_) {}
     try {
       await track.play();
     } catch (err) {
@@ -52,6 +53,45 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const replaceTimerRef = useRef(null);
   const audioHealthTimerRef = useRef(null);
   const prewarmRequestedRef = useRef(false);
+
+  // Mute/unmute all remote audio tracks (speaker control)
+  const setAllRemoteAudioMuted = async (muted) => {
+    try {
+      const client = clientRef.current;
+      const users = client?.remoteUsers || [];
+      for (const u of users) {
+        const t = u.audioTrack;
+        if (!t) continue;
+        try {
+          if (typeof t.setVolume === 'function') {
+            await t.setVolume(muted ? 0 : 100);
+          } else {
+            await t.setEnabled(!muted);
+          }
+        } catch (_) {}
+        if (!muted) {
+          try { await t.play(); } catch (_) {}
+        }
+      }
+      const at = remoteStream?.audioTrack;
+      if (at) {
+        try {
+          if (typeof at.setVolume === 'function') {
+            await at.setVolume(muted ? 0 : 100);
+          } else {
+            await at.setEnabled(!muted);
+          }
+        } catch (_) {}
+        if (!muted) { try { await at.play(); } catch (_) {} }
+      }
+    } catch (_) {}
+  };
+
+  const toggleSpeaker = async () => {
+    const next = !speakerMuted;
+    setSpeakerMuted(next);
+    await setAllRemoteAudioMuted(next);
+  };
 
   useEffect(() => {
     if (isOpen && !prewarmRequestedRef.current) {
@@ -882,6 +922,19 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                 }`}
               >
                 {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+              </button>
+
+              <button
+                onClick={async () => {
+                  const next = !speakerMuted;
+                  setSpeakerMuted(next);
+                  await setAllRemoteAudioMuted(next);
+                }}
+                className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                  speakerMuted ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                {speakerMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
               </button>
 
               <button
