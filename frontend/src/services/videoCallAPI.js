@@ -1,19 +1,24 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:5000/api');
 
-// Create axios instance with auth header
+// Create axios instance with auth header (reads from sessionStorage first)
 const createAuthInstance = () => {
-  const token = localStorage.getItem('campusconnect-auth') 
-    ? JSON.parse(localStorage.getItem('campusconnect-auth')).state.token 
-    : null;
-  
+  let bearer = null;
+  try {
+    const persisted = sessionStorage.getItem('campusconnect-auth') ?? localStorage.getItem('campusconnect-auth');
+    if (persisted) {
+      const parsed = JSON.parse(persisted);
+      bearer = parsed?.state?.token || parsed?.token || null;
+    }
+  } catch (_) {}
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
+
   return axios.create({
     baseURL: API_BASE_URL,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
+    headers
   });
 };
 

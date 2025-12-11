@@ -243,8 +243,16 @@ const VideoCallManager = () => {
       setActiveCall(null);
       notify.success('Call accepted! Opening call...', { key: `call_accepted_${callData.callId}`, ttlMs: 2000 });
     } catch (error) {
-      console.error('VCM: accept error', { status: error?.response?.status, data: error?.response?.data });
-      notify.error('Failed to accept call', { key: 'accept_failed', ttlMs: 2500 });
+      const status = error?.response?.status;
+      const msg = error?.response?.data?.message || error?.response?.data?.error || error?.message;
+      console.error('VCM: accept error', { status, data: error?.response?.data });
+      let userMsg = 'Failed to accept call';
+      if (status === 403) {
+        userMsg = msg || 'You are not allowed to accept this call (forbidden)';
+      } else if (status === 401) {
+        userMsg = 'Session expired. Please log in again.';
+      }
+      notify.error(userMsg, { key: 'accept_failed', ttlMs: 3500 });
     }
   };
 
