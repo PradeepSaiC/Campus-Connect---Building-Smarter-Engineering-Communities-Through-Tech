@@ -381,7 +381,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       
       setCallStatus('connecting');
       setIsConnecting(true);
-      setIsConnecting(true);
+      
       // Get Agora App ID
       const cred = await videoCallAPI.getCredentials();
       const appId = cred?.data?.appId;
@@ -733,7 +733,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     
     const qualityInterval = setInterval(checkNetworkQuality, 5000);
     return () => clearInterval(qualityInterval);
-  }, [isConnected, selectedQuality]);
+  }, [isConnected, selectedQuality, applyQuality]);
 
   const cleanupCall = useCallback(async () => {
     try {
