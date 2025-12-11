@@ -249,6 +249,8 @@ const VideoCallManager = () => {
       let userMsg = 'Failed to accept call';
       if (status === 403) {
         userMsg = msg || 'You are not allowed to accept this call (forbidden)';
+        // Fallback: open studio to allow credential polling if backend shares shared credentials
+        try { window.open(`/call/${callData.callId}?accept=1`, '_blank'); } catch (_) {}
       } else if (status === 401) {
         userMsg = 'Session expired. Please log in again.';
       }
