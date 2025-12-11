@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Volume2, VolumeX } from 'lucide-react';
+import { X, Phone, PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { toast } from 'react-hot-toast';
@@ -14,7 +14,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
-  const [speakerMuted, setSpeakerMuted] = useState(false);
   const [needsAudioResume, setNeedsAudioResume] = useState(false);
   const [participantCount, setParticipantCount] = useState(1);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -33,7 +32,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const playRemoteAudio = async (track) => {
     if (!track) return;
     try { await track.setEnabled(true); } catch (_) {}
-    try { await track.setVolume?.(speakerMuted ? 0 : 100); } catch (_) {}
+    try { await track.setVolume?.(100); } catch (_) {}
     try {
       await track.play();
     } catch (err) {
@@ -67,11 +66,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         const t = u.audioTrack;
         if (!t) continue;
         try {
-          if (typeof t.setVolume === 'function') {
-            await t.setVolume(muted ? 0 : 100);
-          } else {
-            await t.setEnabled(!muted);
-          }
+          if (typeof t.setVolume === 'function') { await t.setVolume(muted ? 0 : 100); } else { await t.setEnabled(!muted); }
         } catch (_) {}
         if (!muted) {
           try { await t.play(); } catch (_) {}
@@ -80,22 +75,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       const at = remoteStream?.audioTrack;
       if (at) {
         try {
-          if (typeof at.setVolume === 'function') {
-            await at.setVolume(muted ? 0 : 100);
-          } else {
-            await at.setEnabled(!muted);
-          }
+          if (typeof at.setVolume === 'function') { await at.setVolume(muted ? 0 : 100); } else { await at.setEnabled(!muted); }
         } catch (_) {}
         if (!muted) { try { await at.play(); } catch (_) {} }
       }
     } catch (_) {}
   };
 
-  const toggleSpeaker = async () => {
-    const next = !speakerMuted;
-    setSpeakerMuted(next);
-    await setAllRemoteAudioMuted(next);
-  };
 
   // Resume all remote audio after user gesture (autoplay fix)
   const resumeAllRemoteAudio = async () => {
@@ -106,13 +92,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         const t = u.audioTrack;
         if (!t) continue;
         try { await t.setEnabled(true); } catch (_) {}
-        try { await t.setVolume?.(speakerMuted ? 0 : 100); } catch (_) {}
+        try { await t.setVolume?.(100); } catch (_) {}
         try { await t.play(); } catch (_) {}
       }
       const at = remoteStream?.audioTrack;
       if (at) {
         try { await at.setEnabled(true); } catch (_) {}
-        try { await at.setVolume?.(speakerMuted ? 0 : 100); } catch (_) {}
+        try { await at.setVolume?.(100); } catch (_) {}
         try { await at.play(); } catch (_) {}
       }
     } catch (_) {}
@@ -938,12 +924,31 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
             <>
               <button
                 onClick={async () => {
-                  const t = localTracksRef.current.audio;
-                  if (!t) return;
-                  const newMutedState = !isMuted;
+                  const client = clientRef.current;
+                  let t = localTracksRef.current.audio;
+                  const turningOff = !isMuted; // current ON -> OFF
                   try {
-                    await t.setEnabled(!newMutedState); // Enable when not muted, disable when muted
-                    setIsMuted(newMutedState);
+                    if (turningOff) {
+                      if (t) {
+                        try { await client?.unpublish?.([t]); } catch (_) {}
+                        try { await t.setEnabled(false); } catch (_) {}
+                      }
+                      setIsMuted(true);
+                    } else {
+                      // Turning ON
+                      if (!t) {
+                        try {
+                          t = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true, encoderConfig: 'speech_standard' });
+                          localTracksRef.current.audio = t;
+                        } catch (err) {
+                          toast.error('Microphone not available');
+                          return;
+                        }
+                      }
+                      try { await t.setEnabled(true); } catch (_) {}
+                      try { await client?.publish?.([t]); } catch (_) {}
+                      setIsMuted(false);
+                    }
                   } catch (e) {
                     console.error('Error toggling microphone:', e);
                     toast.error('Failed to toggle microphone');

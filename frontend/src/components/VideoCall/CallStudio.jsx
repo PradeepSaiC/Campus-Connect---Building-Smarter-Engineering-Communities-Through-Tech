@@ -6,7 +6,7 @@ import useAuthStore from '../../store/authStore.js';
 import socketService from '../../services/socket.js';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { studentAPI } from '../../services/api.js';
-import { Mic, MicOff, Video as VideoIcon, VideoOff, Users, Plus, X, Volume2, VolumeX } from 'lucide-react';
+import { Mic, MicOff, Video as VideoIcon, VideoOff, Users, Plus, X } from 'lucide-react';
 
 const CallStudio = () => {
   const { callId } = useParams();
@@ -36,7 +36,6 @@ const CallStudio = () => {
   const [search, setSearch] = useState('');
   const [sharing, setSharing] = useState(false);
   const [cameraPrompt, setCameraPrompt] = useState({ show: false, lastError: '' });
-  const [speakerMuted, setSpeakerMuted] = useState(false);
 
   const clientRef = useRef(null);
   const localTracks = useRef({ audio: null, video: null });
@@ -76,23 +75,7 @@ const CallStudio = () => {
     return div;
   };
 
-  const setAllRemoteAudioMuted = async (muted) => {
-    const list = Array.from(remoteUsersRef.current.values());
-    for (const u of list) {
-      const t = u.audioTrack;
-      if (!t) continue;
-      try {
-        if (typeof t.setVolume === 'function') {
-          await t.setVolume(muted ? 0 : 100);
-        } else {
-          await t.setEnabled(!muted);
-        }
-      } catch (_) {}
-      if (!muted) {
-        try { await t.play(); } catch (_) {}
-      }
-    }
-  };
+  // no speaker control; always play remote audio at normal volume
 
   useEffect(() => {
     // Ensure socket is connected in the call tab so call_ended reaches this window
@@ -242,7 +225,6 @@ const CallStudio = () => {
             const resume = () => { try { track.play(); } catch (_) {} window.removeEventListener('click', resume); };
             window.addEventListener('click', resume, { once: true });
           }
-          try { if (typeof track.setVolume === 'function') { await track.setVolume(speakerMuted ? 0 : 100); } } catch (_) {}
         };
 
         client.on('user-published', async (user, mediaType) => {
@@ -592,19 +574,50 @@ const CallStudio = () => {
   };
 
   const toggleMute = async () => {
-    const t = localTracks.current.audio; if (!t) return;
-    const next = !muted; await t.setEnabled(!next); setMuted(next);
+    const client = clientRef.current;
+    const t = localTracks.current.audio;
+    const next = !muted;
+    try {
+      if (next) {
+        // Turning mic OFF
+        if (t) {
+          if (client) { try { await client.unpublish([t]); } catch (_) {} }
+          await t.setEnabled(false);
+        }
+        setMuted(true);
+      } else {
+        // Turning mic ON
+        if (!t) {
+          try {
+            const mic = await AgoraRTC.createMicrophoneAudioTrack({
+              AEC: true,
+              ANS: true,
+              AGC: true,
+              encoderConfig: 'speech_standard'
+            });
+            try { await mic.setEnabled(true); } catch (_) {}
+            localTracks.current.audio = mic;
+            if (client) {
+              try { await client.publish([mic]); } catch (_) {}
+            }
+          } catch (e) {
+            toast.error('Unable to access microphone');
+            return;
+          }
+        } else {
+          await t.setEnabled(true);
+          if (client) { try { await client.publish([t]); } catch (_) {} }
+        }
+        setMuted(false);
+      }
+    } catch (_) {}
   };
   const toggleVideo = async () => {
     const t = localTracks.current.video; if (!t) return;
     const next = !videoOff; await t.setEnabled(!next); setVideoOff(next);
   };
 
-  const toggleSpeaker = async () => {
-    const next = !speakerMuted;
-    setSpeakerMuted(next);
-    await setAllRemoteAudioMuted(next);
-  };
+  // no speaker toggle; mic toggle controls only outgoing audio
 
   const toggleScreenShare = async () => {
     try {
@@ -700,9 +713,6 @@ const CallStudio = () => {
       <div className="p-3 bg-gray-900 border-t border-gray-800 flex items-center justify-center gap-3">
         <button onClick={toggleMute} className={`w-12 h-12 rounded-full flex items-center justify-center ${muted ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
           {muted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-        </button>
-        <button onClick={toggleSpeaker} className={`w-12 h-12 rounded-full flex items-center justify-center ${speakerMuted ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
-          {speakerMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
         </button>
         <button onClick={toggleVideo} className={`w-12 h-12 rounded-full flex items-center justify-center ${videoOff ? 'bg-red-600' : 'bg-gray-700 hover:bg-gray-600'}`}>
           {videoOff ? <VideoOff className="w-6 h-6" /> : <VideoIcon className="w-6 h-6" />}
