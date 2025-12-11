@@ -254,7 +254,8 @@ const CallStudio = () => {
             remoteUsersRef.current.set(uid, { ...prev, videoTrack: user.videoTrack, audioTrack: user.audioTrack });
             const div = ensureRemoteContainer(uid);
             if (div) playInto(user.videoTrack, div);
-            // If audio track exists alongside video, ensure it plays
+            // Proactively subscribe to audio as well and play
+            try { await client.subscribe(user, 'audio'); } catch (_) {}
             if (user.audioTrack) { await safePlayAudio(user.audioTrack); }
           }
           if (mediaType === 'audio') {

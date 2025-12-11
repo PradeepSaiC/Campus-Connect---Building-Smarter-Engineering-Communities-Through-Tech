@@ -15,6 +15,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [speakerMuted, setSpeakerMuted] = useState(false);
+  const [needsAudioResume, setNeedsAudioResume] = useState(false);
   const [participantCount, setParticipantCount] = useState(1);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -37,11 +38,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       await track.play();
     } catch (err) {
       console.warn('Audio autoplay blocked', err);
-      const resume = () => {
-        try { track.play(); } catch (_) {}
-        window.removeEventListener('click', resume);
-      };
-      window.addEventListener('click', resume, { once: true });
+      setNeedsAudioResume(true);
+      if (!resumeListenerAttachedRef.current) {
+        const handler = async () => { try { await resumeAllRemoteAudio(); } catch (_) {} };
+        document.addEventListener('click', handler, { once: true });
+        document.addEventListener('keydown', handler, { once: true });
+        resumeListenerAttachedRef.current = true;
+      }
     }
   };
   const remoteVideoRef = useRef(null);
@@ -53,6 +56,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const replaceTimerRef = useRef(null);
   const audioHealthTimerRef = useRef(null);
   const prewarmRequestedRef = useRef(false);
+  const resumeListenerAttachedRef = useRef(false);
 
   // Mute/unmute all remote audio tracks (speaker control)
   const setAllRemoteAudioMuted = async (muted) => {
@@ -91,6 +95,29 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     const next = !speakerMuted;
     setSpeakerMuted(next);
     await setAllRemoteAudioMuted(next);
+  };
+
+  // Resume all remote audio after user gesture (autoplay fix)
+  const resumeAllRemoteAudio = async () => {
+    try {
+      const client = clientRef.current;
+      const users = client?.remoteUsers || [];
+      for (const u of users) {
+        const t = u.audioTrack;
+        if (!t) continue;
+        try { await t.setEnabled(true); } catch (_) {}
+        try { await t.setVolume?.(speakerMuted ? 0 : 100); } catch (_) {}
+        try { await t.play(); } catch (_) {}
+      }
+      const at = remoteStream?.audioTrack;
+      if (at) {
+        try { await at.setEnabled(true); } catch (_) {}
+        try { await at.setVolume?.(speakerMuted ? 0 : 100); } catch (_) {}
+        try { await at.play(); } catch (_) {}
+      }
+    } catch (_) {}
+    setNeedsAudioResume(false);
+    resumeListenerAttachedRef.current = false;
   };
 
   useEffect(() => {
@@ -328,6 +355,11 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
               } catch (e) {
                 console.error('Error playing video track:', e);
               }
+            }
+            // Also ensure audio is subscribed and playing when video arrives
+            try { await client.subscribe(user, 'audio'); } catch (_) {}
+            if (user.audioTrack) {
+              try { await playRemoteAudio(user.audioTrack); } catch (_) {}
             }
           }
           
