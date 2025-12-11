@@ -793,7 +793,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     } catch (e) {
       console.warn('VCMdl: cleanup error', e);
     }
-  };
+  }, [setCallStatus, setIsConnected, setLocalStream, setRemoteStream, setParticipantCount, setDuration]);
 
   // Auto-join when credentials are present and modal is open
   useEffect(() => {
