@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Phone, PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import videoCallAPI from '../../services/videoCallAPI.js';
@@ -339,7 +339,18 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     }
   };
 
-  const qualityToConfig = () => ({ width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 });
+  const qualityToConfig = (q) => {
+    switch (q) {
+      case 'sd':
+        return { width: 426, height: 240, frameRate: 24, bitrateMin: 200, bitrateMax: 700 };
+      case 'hd':
+        return { width: 1280, height: 720, frameRate: 24, bitrateMin: 800, bitrateMax: 2200 };
+      case 'fullhd':
+        return { width: 1920, height: 1080, frameRate: 30, bitrateMin: 1500, bitrateMax: 3500 };
+      default:
+        return { width: 640, height: 360, frameRate: 24, bitrateMin: 300, bitrateMax: 1200 };
+    }
+  };
 
   const applyQuality = async (q) => {
     try { localStorage.setItem('cc_video_quality', q); } catch (_) {}

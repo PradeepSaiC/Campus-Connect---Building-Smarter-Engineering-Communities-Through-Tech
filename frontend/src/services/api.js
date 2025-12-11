@@ -36,9 +36,18 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear auth data and redirect to login
-      localStorage.removeItem('campusconnect-auth');
-      window.location.href = '/login';
+      try {
+        // Only redirect if not already on login to avoid loops
+        const onLogin = window.location.pathname.includes('/login');
+        if (!onLogin) {
+          localStorage.removeItem('campusconnect-auth');
+          const redirect = encodeURIComponent(window.location.pathname || '/');
+          window.location.href = `/login?redirect=${redirect}`;
+        }
+      } catch (_) {
+        // Fallback: best-effort cleanup without navigation
+        try { localStorage.removeItem('campusconnect-auth'); } catch (_) {}
+      }
     }
     return Promise.reject(error);
   }
