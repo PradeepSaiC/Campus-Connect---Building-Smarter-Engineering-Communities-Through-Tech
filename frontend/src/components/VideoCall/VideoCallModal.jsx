@@ -8,162 +8,44 @@ import useAuthStore from '../../store/authStore.js';
 const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRinging = false, onAcceptCall, onRejectCall, onEndCall }) => {
   const { user } = useAuthStore();
   
-  // State management
+  // Minimal runtime state kept; debug logs removed
+
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
-  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [participantCount, setParticipantCount] = useState(1);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [duration, setDuration] = useState(0);
   const [cameras, setCameras] = useState([]);
-  const [audioDevices, setAudioDevices] = useState([]);
-  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState('');
   const [selectedCameraId, setSelectedCameraId] = useState(() => {
     try { return localStorage.getItem('cc_camera_id') || ''; } catch (_) { return ''; }
   });
   const [cameraError, setCameraError] = useState(false);
   const [selectedQuality, setSelectedQuality] = useState(() => {
-    try { return localStorage.getItem('cc_video_quality') || 'hd'; } catch (_) { return 'hd'; }
+    try { return localStorage.getItem('cc_video_quality') || 'uhd'; } catch (_) { return 'uhd'; }
   });
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [audioError, setAudioError] = useState(null);
 
   const localVideoRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const localTracksRef = useRef({ audio: null, video: null, screen: null });
-  const networkQualityTimerRef = useRef(null);
-  
-  // Initialize audio context with error handling
-  const initAudioContext = async () => {
-    try {
-      // Check if we're in a browser environment
-      if (typeof window === 'undefined') return null;
-      
-      if (!audioContextRef.current) {
-        // Create audio context with better error handling
-        try {
-          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
-            latencyHint: 'interactive',
-            sampleRate: 48000
-          });
-          console.log('AudioContext created successfully');
-        } catch (error) {
-          console.error('Failed to create AudioContext:', error);
-          toast.error('Your browser does not support Web Audio API. Audio may not work correctly.');
-          return null;
-        }
-      }
-      
-      // Resume audio context if suspended
-      if (audioContextRef.current.state === 'suspended') {
-        try {
-          await audioContextRef.current.resume();
-          console.log('AudioContext resumed successfully');
-        } catch (error) {
-          console.error('Failed to resume AudioContext:', error);
-          toast.error('Could not initialize audio. Please interact with the page first.');
-          return null;
-        }
-      }
-      
-      return audioContextRef.current;
-    } catch (error) {
-      console.error('Error in initAudioContext:', error);
-      return null;
-    }
-  };
-  
   const playRemoteAudio = async (track) => {
-    if (!track) {
-      console.warn('No audio track provided to playRemoteAudio');
-      return;
-    }
-    
+    if (!track) return;
+    try { await track.setEnabled(true); } catch (_) {}
+    try { await track.setVolume?.(100); } catch (_) {}
     try {
-      console.log('Initializing audio context for remote track');
-      const audioContext = await initAudioContext();
-      if (!audioContext) {
-        console.error('Could not initialize audio context');
-        return;
-      }
-
-      // Ensure track is enabled
-      try {
-        await track.setEnabled(true);
-        console.log('Audio track enabled');
-      } catch (e) {
-        console.error('Failed to enable audio track:', e);
-      }
-      
-      // Set volume to maximum if supported
-      if (typeof track.setVolume === 'function') {
-        try {
-          await track.setVolume(100);
-          console.log('Audio volume set to 100%');
-        } catch (e) {
-          console.warn('Could not set audio volume:', e);
-        }
-      }
-      
-      // Try to play the track with retry mechanism
-      const playWithRetry = async (retryCount = 0) => {
-        try {
-          await track.play();
-          console.log('Audio track is playing successfully');
-          return true;
-        } catch (playError) {
-          console.warn(`Audio play failed (attempt ${retryCount + 1}/3):`, playError);
-          
-          if (retryCount < 2) {
-            // Wait before retrying
-            await new Promise(resolve => setTimeout(resolve, 500));
-            return playWithRetry(retryCount + 1);
-          }
-          
-          // If we've exhausted retries, try one last time after resuming audio context
-          try {
-            if (audioContext.state === 'suspended') {
-              await audioContext.resume();
-            }
-            await track.play();
-            console.log('Audio track started after final resume attempt');
-            return true;
-          } catch (finalError) {
-            console.error('Final audio play attempt failed:', finalError);
-            toast.error('Could not play audio. Please check your audio settings and ensure your browser has permission to play audio.');
-            return false;
-          }
-        }
+      await track.play();
+    } catch (err) {
+      console.warn('Audio autoplay blocked', err);
+      const resume = () => {
+        try { track.play(); } catch (_) {}
+        window.removeEventListener('click', resume);
       };
-      
-      // Start the playback with retry
-      await playWithRetry();
-      
-      // Set up a one-time click handler to resume audio if needed
-      const handleUserInteraction = async () => {
-        try {
-          if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-          }
-          if (track.isPlaying === false) {
-            await track.play();
-          }
-          window.removeEventListener('click', handleUserInteraction);
-        } catch (e) {
-          console.error('Failed to resume audio on user interaction:', e);
-        }
-      };
-      
-      window.addEventListener('click', handleUserInteraction, { once: true });
-    } catch (error) {
-      console.error('Error setting up remote audio:', error);
-      toast.error('Could not set up audio. Please check your audio settings.');
+      window.addEventListener('click', resume, { once: true });
     }
   };
   const remoteVideoRef = useRef(null);
   const clientRef = useRef(null);
+  const localTracksRef = useRef({ audio: null, video: null });
   const durationTimerRef = useRef(null);
   const resubTimerRef = useRef(null);
   const republishTimerRef = useRef(null);
@@ -185,143 +67,26 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     }
   }, [isOpen]);
 
-  const toggleMicrophone = async () => {
-    try {
-      const audioTrack = localTracksRef.current?.audio;
-      if (!audioTrack) {
-        console.warn('No audio track available to toggle');
-        return;
-      }
-      
-      const newState = !isAudioEnabled;
-      console.log(`Toggling microphone to: ${newState ? 'ON' : 'OFF'}`);
-      
-      try {
-        // If enabling, make sure we have permissions and audio context is active
-        if (newState) {
-          // Request microphone permissions if not already granted
-          const permissionResult = await navigator.permissions.query({ name: 'microphone' });
-          if (permissionResult.state === 'denied') {
-            toast.error('Microphone access is denied. Please check your browser permissions.');
-            return;
-          }
-          
-          // Initialize audio context
-          const audioContext = await initAudioContext();
-          if (!audioContext) {
-            toast.error('Could not initialize audio. Please check your audio settings.');
-            return;
-          }
-        }
-        
-        // Toggle the track
-        await audioTrack.setEnabled(newState);
-        setIsAudioEnabled(newState);
-        
-        // If we're enabling, ensure the track is properly published
-        if (newState && clientRef.current) {
-          try {
-            await clientRef.current.publish(audioTrack);
-            console.log('Audio track published successfully');
-          } catch (publishError) {
-            console.error('Could not publish audio track:', publishError);
-            toast.error('Failed to enable microphone. Please check your audio settings.');
-            // Revert the state if publish fails
-            await audioTrack.setEnabled(false);
-            setIsAudioEnabled(false);
-          }
-        }
-      } catch (error) {
-        console.error('Error in toggleMicrophone:', error);
-        toast.error('Failed to toggle microphone. Please check your audio settings.');
-      }
-    } catch (error) {
-      console.error('Error toggling microphone:', error);
-      toast.error('Failed to toggle microphone. Please check your audio settings.');
-      setAudioError(error.message);
-    }
-  };
-  
-  // Handle audio device change
-  const handleAudioDeviceChange = async (deviceId) => {
-    try {
-      setSelectedAudioDeviceId(deviceId);
-      
-      // Only proceed if we have an active audio track
-      if (!localTracksRef.current?.audio) return;
-      
-      // Create new audio track with the selected device
-      const [newAudioTrack] = await AgoraRTC.createMicrophoneAudioTrack({
-        microphoneId: deviceId,
-        AEC: true,
-        AGC: true,
-        ANS: true,
-        encoderConfig: 'speech_standard'
-      });
-      
-      // Replace the old track
-      const oldTrack = localTracksRef.current.audio;
-      if (oldTrack) {
-        await clientRef.current?.unpublish(oldTrack);
-        oldTrack.stop();
-        oldTrack.close();
-      }
-      
-      // Update the reference and publish new track
-      localTracksRef.current.audio = newAudioTrack;
-      if (clientRef.current) {
-        await clientRef.current.publish(newAudioTrack);
-      }
-      
-      // Update UI state
-      setIsAudioEnabled(true);
-      toast.success('Microphone device changed');
-    } catch (error) {
-      console.error('Error changing audio device:', error);
-      toast.error('Failed to change audio device');
-      setAudioError(error.message);
-    }
-  };
-
   const preflightAndCreateTracks = async () => {
     const client = clientRef.current;
     if (!client) return;
-    
-    // First, ensure we have audio permissions
-    try {
-      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      tempStream.getTracks().forEach(track => track.stop());
-    } catch (error) {
-      console.warn('Audio permission not granted:', error);
-      toast.error('Microphone access is required for audio calls. Please allow microphone access and try again.');
-    }
-
+    // First attempt
     let micTrack = null;
     let camTrack = null;
-    
-    // Create audio track with better error handling
-    try {
+    try { 
       micTrack = await AgoraRTC.createMicrophoneAudioTrack({
-        AEC: true,  // Acoustic Echo Cancellation
-        ANS: true,  // Automatic Noise Suppression
-        AGC: true,  // Automatic Gain Control
+        AEC: true,
+        ANS: true,
+        AGC: true,
         encoderConfig: 'music_standard'
       });
-      
       if (micTrack) {
-        try { 
-          await micTrack.setEnabled(true);
-          await micTrack.setVolume(100);
-          console.log('Microphone track created and enabled');
-        } catch (e) {
-          console.error('Failed to configure microphone:', e);
-          toast.error('Could not configure microphone. Please check your audio settings.');
-        }
+        try { await micTrack.setEnabled(true); } catch (_) {}
+        try { await micTrack.setVolume?.(100); } catch (_) {}
+        console.log('Microphone track ready with audio enhancements');
       }
     } catch (e) {
-      console.error('Failed to create microphone track:', e);
-      toast.error('Could not access microphone. Please check your audio settings and permissions.');
-      return;
+      console.warn('Failed to create microphone track:', e);
     }
     // Low-latency camera config (240p@24fps motion)
     const cfg = { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 };
@@ -465,383 +230,155 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     }
   };
 
-  // Load available audio devices
-  useEffect(() => {
-    const getAudioDevices = async () => {
-      try {
-        // Request permission first
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(device => device.kind === 'audioinput');
-        setAudioDevices(audioInputs);
-        
-        // Set the first available audio device as default if none selected
-        if (audioInputs.length > 0 && !selectedAudioDeviceId) {
-          setSelectedAudioDeviceId(audioInputs[0].deviceId);
-        }
-      } catch (error) {
-        console.error('Error getting audio devices:', error);
-        setAudioError('Could not access microphone. Please check your permissions.');
-      }
-    };
-    
-    getAudioDevices();
-    
-    // Listen for device changes
-    useEffect(() => {
-      // Initialize audio context
-      const init = async () => {
-        await initAudioContext();
-      };
-      init();
-      
-      // Add user gesture handler for audio context
-      const handleUserGesture = async () => {
-        try {
-          await initAudioContext();
-        } catch (e) {
-          console.warn('Could not resume audio context:', e);
-        }
-      };
-      
-      // Set up user interaction listeners for audio context
-      const interactionEvents = ['click', 'keydown', 'touchstart'];
-      interactionEvents.forEach(event => {
-        window.addEventListener(event, handleUserGesture, { once: true });
-      });
-    }, []);
-      
-    const joinAndSetup = async () => {
+  const joinAndSetup = async () => {
+    try {
       if (!callData?.channelName || !callData?.token) {
         console.warn('VCMdl: Missing credentials to join');
         return;
       }
       setIsConnecting(true);
-      
-      // Configure client settings
-      const configureClient = async (client) => {
-        try {
-          // Set audio profile for voice calls
-          await client.setAudioProfile('speech_standard');
-          
-          // Enable dual stream for adaptive quality
-          try {
-            await client.enableDualStream();
-            await client.setLowStreamParameter({
-              width: 160,
-              height: 90,
-              framerate: 15,
-              bitrate: 45
-            });
-          } catch (e) {
-            console.warn('Dual stream not supported:', e);
-          }
-          
-          // Set audio frame rate
-          await client.setAudioFrameRate(24);
-          
-          // Enable audio volume indicator
-          await client.enableAudioVolumeIndicator();
-          
-        } catch (e) {
-          console.warn('Could not configure client settings:', e);
-        }
-      };
-
-      // Main initialization function
-      const initializeCall = async () => {
-        try {
-          // Get Agora App ID
-          const cred = await videoCallAPI.getCredentials();
-          const appId = cred?.data?.appId;
-          if (!appId) {
-            throw new Error('Agora App ID not configured');
-          }
-
-          // Create client with optimized settings
-          const client = AgoraRTC.createClient({ 
-            mode: 'rtc', 
-            codec: 'h264',
-            audio: {
-              AEC: true,      // Acoustic Echo Cancellation
-              ANS: true,      // Automatic Noise Suppression
-              AGC: true,      // Automatic Gain Control
-              codec: 'aac',
-              sampleRate: 48000,
-              channelCount: 1,
-              bitrate: 64,    // 64kbps for better voice quality
-              stereo: false,
-              audioProcessing: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-              }
-            },
-            // Optimized WebRTC configuration
-            websocketRetryConfig: {
-              timeout: 2000,
-              timeoutFactor: 1.5,
-              maxRetryCount: 3
-            },
-            // ICE servers for better NAT traversal
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' }
-            ]
-          });
-          
-          clientRef.current = client;
-          
-          // Configure client settings
-          await configureClient(client);
-          
-          // Set up network quality monitoring
-          client.on('network-quality', (stats) => {
-            try {
-              const { downlinkNetworkQuality, uplinkNetworkQuality } = stats;
-              
-              // Adjust audio bitrate based on network quality
-              if (localTracksRef.current.audio) {
-                if (uplinkNetworkQuality > 3) { // Poor network
-                  localTracksRef.current.audio.setBitrate(32);
-                } else {
-                  localTracksRef.current.audio.setBitrate(64);
-                }
-              }
-              
-              console.log('Network quality - Downlink:', downlinkNetworkQuality, 'Uplink:', uplinkNetworkQuality);
-              
-            } catch (error) {
-              console.error('Error handling network quality:', error);
-            }
-          });
-          
-          return client;
-          
-        } catch (error) {
-          console.error('Failed to initialize client:', error);
-          toast.error('Failed to initialize video call. Please try again.');
-          setIsConnecting(false);
-          return null;
-        }
-      };
-      
-      // Start the call initialization
-      initializeCall().then(client => {
-        if (!client) return;
-        
-        // Set up event handlers for the call
-        const setupEventHandlers = () => {
-          // Remote user handlers with improved error handling
-          client.on('user-published', async (user, mediaType) => {
-            console.log(`User ${user.uid} published ${mediaType}`);
-            
-            try {
-              await client.subscribe(user, mediaType);
-              console.log(`Subscribed to ${mediaType} for user ${user.uid}`);
-              
-              if (mediaType === 'video') {
-                try {
-                  // Set video quality and fallback options
-                  await client.setRemoteVideoStreamType?.(user, 1); // Low quality stream
-                  await client.setStreamFallbackOption?.(user, 2);  // Auto-fallback based on network
-                  
-                  // Update remote stream state
-                  setRemoteStream(user);
-                  
-                  // Play the video track
-                  if (remoteVideoRef.current && user.videoTrack) {
-                    try {
-                      // Clear previous video if any
-                      remoteVideoRef.current.innerHTML = '';
-                      // Play with hardware acceleration and proper scaling
-                      await user.videoTrack.play(remoteVideoRef.current, { 
-                        mirror: false,
-                        fit: 'contain'
-                      });
-                      
-                      // Ensure video element has proper styling
-                      const videoElement = remoteVideoRef.current.querySelector('video');
-                      if (videoElement) {
-                        videoElement.style.width = '100%';
-                        videoElement.style.height = '100%';
-                        videoElement.style.objectFit = 'contain';
-                      }
-                      
-                      console.log('Playing video track for user:', user.uid);
-                    } catch (e) {
-                      console.error('Error playing video track:', e);
-                      toast.error('Could not display video. Trying to reconnect...');
-                    }
-                  }
-                } catch (e) {
-                  console.error('Error setting up video:', e);
-                }
-              }
-              
-              if (mediaType === 'audio') {
-                const playAudioWithRetry = async (retryCount = 0) => {
-                  try {
-                    if (user.audioTrack) {
-                      // Set volume and play
-                      await user.audioTrack.setVolume(100);
-                      await user.audioTrack.play();
-                      console.log('Playing audio track for user:', user.uid);
-                    }
-                  } catch (e) {
-                    console.error('Error playing audio track:', e);
-                    
-                    // Retry up to 3 times with exponential backoff
-                    if (retryCount < 3) {
-                      const delay = 500 * Math.pow(2, retryCount);
-                      console.log(`Retrying audio in ${delay}ms...`);
-                      setTimeout(() => playAudioWithRetry(retryCount + 1), delay);
-                    } else {
-                      toast.error('Could not start audio. Please check your audio settings.');
-                    }
-                  }
-                };
-                
-                // Start audio playback with retry
-                playAudioWithRetry();
-              }
-              
-              setParticipantCount(c => Math.max(1, c + 1));
-              
-            } catch (e) {
-              console.error(`Failed to handle ${mediaType} for user ${user.uid}:`, e);
-            }
-          });
-          
-          client.on('user-unpublished', (user, mediaType) => {
-            console.log(`User ${user.uid} unpublished ${mediaType}`);
-            
-            if (mediaType === 'video') {
-              setRemoteStream(null);
-              console.log('Cleared remote video stream');
-            }
-            
-            if (mediaType === 'audio') {
-              try { 
-                if (user.audioTrack) {
-                  console.log('Stopping audio track for user:', user.uid);
-                  user.audioTrack.stop();
-                  user.audioTrack.close();
-                }
-              } catch (e) {
-                console.warn('Error stopping audio track:', e);
-              }
-            }
-            
-            setParticipantCount(c => Math.max(1, c - 1));
-            console.log('Participant count updated');
-          });
-          
-          client.on('connection-state-change', async (curState, prevState) => {
-            console.log(`Connection state changed from ${prevState} to ${curState}`);
-            
-            if (curState === 'CONNECTED') {
-              setIsConnected(true);
-              // Re-publish local tracks after reconnect
-              const c = clientRef.current;
-              const { audio, video } = localTracksRef.current;
-              const toPublish = [];
-              if (audio) toPublish.push(audio);
-              if (video) toPublish.push(video);
-              if (c && toPublish.length) {
-                try { 
-                  await c.unpublish(toPublish); 
-                  await c.publish(toPublish); 
-                } catch (_) {}
-              }
-              
-              // Re-subscribe any remote users
-              const remotes = c?.remoteUsers || [];
-              for (const ru of remotes) {
-                try {
-                  if (ru.hasVideo) {
-                    await c.subscribe(ru, 'video');
-                    setRemoteStream(ru);
-                    if (remoteVideoRef.current) {
-                      try { 
-                        remoteVideoRef.current.innerHTML = ''; 
-                        await ru.videoTrack?.play(remoteVideoRef.current, { mirror: false });
-                      } catch (_) {}
-                    }
-                  }
-                  if (ru.hasAudio && ru.audioTrack) {
-                    await c.subscribe(ru, 'audio');
-                    try {
-                      await playRemoteAudio(ru.audioTrack);
-                    } catch (e) {
-                      console.error('Error playing remote audio on reconnect:', e);
-                    }
-                  }
-                } catch (_) {}
-              }
-            } else if (curState === 'DISCONNECTED') {
-              setIsConnected(false);
-            }
-          });
-        };
-        
-        // Set up event handlers
-        setupEventHandlers();
-        
-        // Join the channel
-        const joinChannel = async () => {
-          try {
-            const uid = String(user?.id || user?._id);
-            
-            // Set client role and enable features
-            try { await client.setClientRole?.('host'); } catch (_) {}
-            try { await client.enableAudioVolumeIndicator?.(); } catch (_) {}
-            
-            // Join the channel with retry
-            const joinWithRetry = async (attempt = 0) => {
-              try {
-                await client.join(appId, callData.channelName, callData.token || null, uid || null);
-                console.log('Successfully joined channel');
-                
-                // Start call timer
-                startCallTimer();
-                
-                // Publish local tracks
-                await preflightAndCreateTracks();
-                
-              } catch (joinError) {
-                console.error('Join error (attempt', attempt + 1, '):', joinError);
-                
-                if (attempt < 2) { // Retry up to 3 times
-                  const delay = 1000 * Math.pow(2, attempt); // Exponential backoff
-                  console.log(`Retrying join in ${delay}ms...`);
-                  await new Promise(resolve => setTimeout(resolve, delay));
-                  return joinWithRetry(attempt + 1);
-                } else {
-                  throw joinError; // Re-throw after max retries
-                }
-              }
-            };
-            
-            await joinWithRetry();
-            
-          } catch (error) {
-            console.error('Failed to join channel:', error);
-            toast.error('Failed to join the call. Please check your connection and try again.');
-            setIsConnecting(false);
-            onClose();
-          }
-        };
-        
-        joinChannel();
-        
-      }).catch(error => {
-        console.error('Call initialization failed:', error);
-        toast.error('Failed to initialize call. Please try again.');
+      // Get Agora App ID
+      const cred = await videoCallAPI.getCredentials();
+      const appId = cred?.data?.appId;
+      if (!appId) {
+        toast.error('Agora App ID not configured');
         setIsConnecting(false);
+        return;
+      }
+
+      // Create client (rtc + h264) for low latency 1:1
+      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
+      clientRef.current = client;
+      // Low-latency settings
+      try { await client.enableDualStream?.(); } catch (_) {}
+      try { await client.setLowStreamParameter?.({ width: 160, height: 90, frameRate: 15, bitrate: 120 }); } catch (_) {}
+      try { await client.setAudioProfile?.('speech_low_latency'); } catch (_) {}
+
+      // Remote user handlers
+      client.on('user-published', async (user, mediaType) => {
+        console.log(`User ${user.uid} published ${mediaType}`);
+        console.log('Has audio:', user.hasAudio, 'Has video:', user.hasVideo);
+        
+        try {
+          await client.subscribe(user, mediaType);
+          console.log(`Subscribed to ${mediaType} for user ${user.uid}`);
+          
+          if (mediaType === 'video') {
+            // Force low stream and set audio-fallback for poor network
+            try { 
+              await client.setRemoteVideoStreamType?.(user, 1);
+              console.log('Set remote video stream type to low for user:', user.uid);
+            } catch (e) { 
+              console.warn('Failed to set remote video stream type:', e);
+            }
+            
+            try { 
+              await client.setStreamFallbackOption?.(user, 2);
+              console.log('Set stream fallback option for user:', user.uid);
+            } catch (e) { 
+              console.warn('Failed to set stream fallback option:', e);
+            }
+            
+            setRemoteStream(user);
+            if (remoteVideoRef.current) {
+              try { 
+                remoteVideoRef.current.innerHTML = ''; 
+                user.videoTrack?.play(remoteVideoRef.current, { mirror: false });
+                console.log('Playing video track for user:', user.uid);
+              } catch (e) {
+                console.error('Error playing video track:', e);
+              }
+            }
+          }
+          
+          if (mediaType === 'audio') {
+            try {
+              if (user.audioTrack) {
+                await playRemoteAudio(user.audioTrack);
+                console.log('Successfully playing audio track for user:', user.uid);
+              } else {
+                console.warn('No audio track found for user:', user.uid);
+              }
+            } catch (e) {
+              console.error('Error playing audio track:', e);
+              setTimeout(async () => {
+                try {
+                  if (user.audioTrack) {
+                    await playRemoteAudio(user.audioTrack);
+                  }
+                } catch (retryError) {
+                  console.error('Retry audio play failed:', retryError);
+                }
+              }, 500);
+            }
+          }
+          
+          setParticipantCount((c) => Math.max(1, c + 1));
+        } catch (e) {
+          console.error(`Failed to handle ${mediaType} for user ${user.uid}:`, e);
+        }
       });
+      client.on('user-unpublished', (user, mediaType) => {
+        console.log(`User ${user.uid} unpublished ${mediaType}`);
+        
+        if (mediaType === 'video') {
+          setRemoteStream(null);
+          console.log('Cleared remote video stream');
+        }
+        
+        if (mediaType === 'audio') {
+          try { 
+            if (user.audioTrack) {
+              console.log('Stopping audio track for user:', user.uid);
+              user.audioTrack.stop();
+              user.audioTrack.close();
+            }
+          } catch (e) {
+            console.warn('Error stopping audio track:', e);
+          }
+        }
+        
+        setParticipantCount((c) => Math.max(1, c - 1));
+        console.log('Participant count updated');
+      });
+      client.on('connection-state-change', async (curState, prevState) => {
+        try {
+          if (curState === 'CONNECTED') {
+            // Re-publish local tracks after reconnect
+            const c = clientRef.current;
+            const { audio, video } = localTracksRef.current;
+            const toPublish = [];
+            if (audio) toPublish.push(audio);
+            if (video) toPublish.push(video);
+            if (c && toPublish.length) {
+              try { await c.publish(toPublish); } catch (_) {}
+            }
+            // Re-subscribe any remote users
+            const remotes = c?.remoteUsers || [];
+            for (const ru of remotes) {
+              try {
+                if (ru.hasVideo) {
+                  await c.subscribe(ru, 'video');
+                  setRemoteStream(ru);
+                  if (remoteVideoRef.current) {
+                    try { remoteVideoRef.current.innerHTML = ''; } catch (_) {}
+                    ru.videoTrack?.play(remoteVideoRef.current, { mirror: false });
+                  }
+                }
+                if (ru.hasAudio && ru.audioTrack) {
+                  await c.subscribe(ru, 'audio');
+                  try {
+                    await playRemoteAudio(ru.audioTrack);
+                  } catch (e) {
+                    console.error('Error playing remote audio on reconnect:', e);
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      });
+
       // Join channel with optimized options
       const uid = String(user?.id || user?._id);
       try {
@@ -1056,31 +593,12 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       if (document.visibilityState === 'visible') {
         const { video } = localTracksRef.current;
         try {
-          if (video) {
-            await video.setEnabled(true);
-          }
-        } catch (e) {
-          console.warn('Failed to resume video:', e);
-        }
+          if (video) await video.setEnabled(true);
+        } catch (_) {}
       }
     };
-    
-    // Initialize audio context when component mounts
-    const init = async () => {
-      try {
-        await initAudioContext();
-      } catch (e) {
-        console.warn('Failed to initialize audio context:', e);
-      }
-    };
-    
-    init();
-    
-    // Set up visibility change listener
     document.addEventListener('visibilitychange', onVis);
-    return () => {
-      document.removeEventListener('visibilitychange', onVis);
-    };
+    return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
 
   useEffect(() => {
@@ -1347,70 +865,23 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
           ) : (
             <>
               <button
-                onClick={toggleMicrophone}
-                className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                  isAudioEnabled ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-red-600 text-white'
-                }`}
-                title={isAudioEnabled ? 'Mute' : 'Unmute'}
-              >
-                {isAudioEnabled ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
-              </button>
-
-              <button
                 onClick={async () => {
+                  const t = localTracksRef.current.audio;
+                  if (!t) return;
+                  const newMutedState = !isMuted;
                   try {
-                    const client = clientRef.current;
-                    const { audio } = localTracksRef.current;
-                    
-                    // Stop and remove existing audio track
-                    if (audio) {
-                      try {
-                        if (client) {
-                          await client.unpublish([audio]);
-                        }
-                        audio.close();
-                      } catch (e) {
-                        console.warn('Error removing old audio track:', e);
-                      }
-                      localTracksRef.current.audio = null;
-                    }
-                    
-                    // Create and publish new audio track
-                    try {
-                      const newAudio = await AgoraRTC.createMicrophoneAudioTrack({
-                        AEC: true,
-                        ANS: true,
-                        AGC: true,
-                        encoderConfig: 'music_standard'
-                      });
-                      
-                      if (newAudio) {
-                        await newAudio.setEnabled(true);
-                        await newAudio.setVolume(100);
-                        
-                        if (client) {
-                          await client.publish([newAudio]);
-                        }
-                        
-                        localTracksRef.current.audio = newAudio;
-                        setIsMuted(false);
-                        toast.success('Microphone reconnected');
-                      }
-                    } catch (e) {
-                      console.error('Failed to create new audio track:', e);
-                      toast.error('Could not reconnect microphone. Please check permissions.');
-                    }
-                  } catch (error) {
-                    console.error('Error in audio retry:', error);
-                    toast.error('Failed to fix audio. Please try again.');
+                    await t.setEnabled(!newMutedState); // Enable when not muted, disable when muted
+                    setIsMuted(newMutedState);
+                  } catch (e) {
+                    console.error('Error toggling microphone:', e);
+                    toast.error('Failed to toggle microphone');
                   }
                 }}
-                className="p-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-colors"
-                title="Retry Audio"
+                className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                  isMuted ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
-                </svg>
+                {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
               </button>
 
               <button

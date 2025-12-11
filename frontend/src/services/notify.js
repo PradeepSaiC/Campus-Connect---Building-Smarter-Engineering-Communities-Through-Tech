@@ -17,38 +17,24 @@ function shouldShow(key, ttlMs) {
 }
 
 function desktopNotify(title, body) {
-  // Completely disable desktop notifications
-  return;
-  
-  // The following code is kept but unreachable as a reference
   try {
     if (!('Notification' in window)) return;
-    
-    // Create completely silent notification options
-    const options = {
-      body,
-      silent: true, // Ensure no sound
-      icon: '/favicon.ico',
-      requireInteraction: false,
-      vibrate: [] // No vibration
-    };
-
+    if (document.hasFocus()) return; // avoid duplicates when focused
     if (Notification.permission === 'granted') {
-      // Don't show any notifications even if permission is granted
-      return;
+      new Notification(title || 'Notification', { body });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then((perm) => {
+        if (perm === 'granted') new Notification(title || 'Notification', { body });
+      });
     }
-  } catch (error) {
-    console.warn('Notification error:', error);
-  }
+  } catch (_) {}
 }
 
 function show(kind, message, opts = {}) {
   const { key, ttlMs = 2500, desktop = false, title } = opts;
   if (!message) return;
   if (!shouldShow(key || message, ttlMs)) return;
-  
-  // Disable all desktop notifications
-  // desktopNotify is intentionally not called to prevent any notifications
+  if (desktop) desktopNotify(title || 'Campus Connect', message);
   switch (kind) {
     case 'success':
       return toast.success(message);
@@ -72,8 +58,11 @@ const notify = {
   warn: (msg, opts) => show('warn', msg, opts),
   loading: (msg, opts) => show('loading', msg, opts),
   requestPermission: () => {
-    // Don't request notification permissions at all
-    return Promise.resolve('denied');
+    try {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    } catch (_) {}
   }
 };
 

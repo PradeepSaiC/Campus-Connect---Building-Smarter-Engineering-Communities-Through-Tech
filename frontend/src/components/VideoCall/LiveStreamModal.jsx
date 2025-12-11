@@ -86,22 +86,6 @@ const LiveStreamModal = ({ isOpen, onClose, streamData, isViewer = false }) => {
       await client.setClientRole('audience');
 
       // Handle host published events
-      const playRemoteAudio = async (track) => {
-        if (!track) return;
-        try { await track.setEnabled(true); } catch (_) {}
-        try { await track.setVolume?.(100); } catch (_) {}
-        try {
-          await track.play();
-        } catch (err) {
-          console.warn('Audio autoplay blocked', err);
-          const resume = () => {
-            try { track.play(); } catch (_) {}
-            window.removeEventListener('click', resume);
-          };
-          window.addEventListener('click', resume, { once: true });
-        }
-      };
-
       client.on('user-published', async (user, mediaType) => {
         await client.subscribe(user, mediaType);
         if (mediaType === 'video') {
@@ -111,7 +95,7 @@ const LiveStreamModal = ({ isOpen, onClose, streamData, isViewer = false }) => {
           }
         }
         if (mediaType === 'audio') {
-          await playRemoteAudio(user.audioTrack);
+          user.audioTrack.play();
         }
       });
 
