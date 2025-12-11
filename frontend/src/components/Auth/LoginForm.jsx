@@ -30,14 +30,40 @@ const LoginForm = () => {
     setError(null);
 
     try {
+      // Clear any existing auth data before new login attempt
+      localStorage.removeItem('campusconnect-auth');
+      sessionStorage.removeItem('campusconnect-auth');
+      
       const response = await authAPI.login(formData.usn, formData.password);
+      
+      // Clear form data after successful login
+      setFormData({
+        usn: '',
+        password: ''
+      });
+      
       login(response.data.student, response.data.token);
       toast.success('🎉 Login successful!');
-      navigate('/dashboard');
+      
+      // Get the redirect path from location state or default to dashboard
+      const from = location.state?.from || '/dashboard';
+      navigate(from, { replace: true });
     } catch (error) {
-      const message = error.response?.data?.message || 'Login failed';
+      // Clear form on error
+      setFormData(prev => ({
+        ...prev,
+        password: '' // Clear password field on error
+      }));
+      
+      const message = error.response?.data?.message || 'Login failed. Please check your credentials.';
       setError(message);
       toast.error(`❌ ${message}`);
+      
+      // Clear any partial auth state
+      if (error.response?.status === 401) {
+        localStorage.removeItem('campusconnect-auth');
+        sessionStorage.removeItem('campusconnect-auth');
+      }
     } finally {
       setIsLoading(false);
       setLoading(false);

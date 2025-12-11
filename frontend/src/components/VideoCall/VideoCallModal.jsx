@@ -31,24 +31,22 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const playRemoteAudio = async (track) => {
     if (!track) return;
     
-    try {
-      // First ensure the track is enabled
-      await track.setEnabled(true);
-      
-      // Set volume to 100%
-      if (typeof track.setVolume === 'function') {
-        await track.setVolume(100);
-      }
-      
-      // Create an audio element if not already playing
-      if (!track.isPlaying) {
-        try {
-          // Try to play the track
-          await track.play();
-          console.log('Audio track is now playing');
-        } catch (playError) {
-          console.warn('Audio autoplay blocked:', playError);
-          // Show a message to the user
+    const playWithRetry = async (retryCount = 0) => {
+      try {
+        // Ensure track is enabled and set volume
+        await track.setEnabled(true);
+        if (typeof track.setVolume === 'function') {
+          await track.setVolume(100);
+        }
+        
+        // Try to play the track
+        await track.play();
+        console.log('Audio track is now playing');
+      } catch (playError) {
+        console.warn('Audio play error:', playError);
+        
+        // If we've retried too many times, show a message to the user
+        if (retryCount >= 2) {
           toast('Click anywhere to enable audio', { 
             icon: '🔊',
             duration: 3000
@@ -57,20 +55,27 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
           // Set up a one-time click handler to resume audio
           const resumeAudio = async () => {
             try {
-              await track.play();
-              console.log('Audio resumed after user interaction');
+              await playWithRetry(0);
             } catch (e) {
-              console.error('Failed to resume audio:', e);
+              console.error('Failed to resume audio after click:', e);
             }
             window.removeEventListener('click', resumeAudio);
           };
           
           window.addEventListener('click', resumeAudio, { once: true });
+          return;
         }
+        
+        // Retry with a small delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await playWithRetry(retryCount + 1);
       }
+    };
+    
+    try {
+      await playWithRetry();
     } catch (err) {
       console.error('Error in playRemoteAudio:', err);
-      // Try to recover by recreating the audio track if possible
       if (err.name === 'NotAllowedError' || err.name === 'NotReadableError') {
         toast.error('Audio permission issue. Please check your browser settings.');
       }
@@ -147,12 +152,56 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       toast.error('Failed to access microphone. Please check your audio settings.');
     }
     // Low-latency camera config (240p@24fps motion)
-    const cfg = { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 };
-    try { camTrack = await AgoraRTC.createCameraVideoTrack({
-      encoderConfig: cfg,
-      cameraId: selectedCameraId || undefined,
-      optimizationMode: 'motion'
-    }); } catch (e1) {
+    const cfg = {
+      // Lower resolution for better performance
+      width: 640,
+      height: 360,
+      frameRate: 24,
+      bitrateMin: 200,
+      bitrateMax: 600,
+      // Enable hardware acceleration
+      optimizationMode: 'motion',
+      // Better quality settings
+      scalabiltyMode: 'S1T3',
+      // Enable H.264 baseline profile for better compatibility
+      codec: 'h264',
+      codecConfig: {
+        width: 640,
+        height: 360,
+        frameRate: 24,
+        bitrateMin: 200,
+        bitrateMax: 600,
+        bitrate: 400,
+        // Enable temporal scalability for better adaptation
+        scalabilityMode: 'S1T3'
+      },
+      // Enable hardware acceleration
+      hwAccel: 'prefer-hardware',
+      // Better video processing
+      processing: {
+        denoise: true,
+        deinterlace: true,
+        stabilization: true
+      }
+    };
+    
+    try {
+      camTrack = await AgoraRTC.createCameraVideoTrack({
+        encoderConfig: cfg,
+        cameraId: selectedCameraId || undefined,
+        optimizationMode: 'motion',
+        // Enable hardware acceleration
+        hwAccel: 'prefer-hardware',
+        // Better video processing
+        processing: {
+          denoise: true,
+          deinterlace: true,
+          stabilization: true
+        }
+      });
+      
+      console.log('Camera track created with config:', cfg);
+    } catch (e1) {
       // If camera is busy or fails, enumerate devices and try alternates
       try {
         const cams = await AgoraRTC.getCameras();
@@ -242,12 +291,40 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       }, 7000);
     }
     if (camTrack && localVideoRef.current) {
-      camTrack.play(localVideoRef.current, { mirror: false });
       try {
+        // Clear any existing video elements
+        while (localVideoRef.current.firstChild) {
+          localVideoRef.current.removeChild(localVideoRef.current.firstChild);
+        }
+        
+        // Play the track with optimized settings
+        await camTrack.play(localVideoRef.current, { 
+          mirror: false,
+          // Enable hardware acceleration
+          hwaccel: 'prefer-hardware',
+          // Optimize for low latency
+          optimizationMode: 'motion',
+          // Better scaling
+          objectFit: 'cover'
+        });
+        
+        // Apply additional styling for better rendering
         const v = localVideoRef.current.querySelector('video');
         if (v) {
-          v.style.transform = 'none'; v.style.webkitTransform = 'none';
+          v.style.transform = 'none';
+          v.style.webkitTransform = 'none';
+          v.style.objectFit = 'cover';
+          v.style.width = '100%';
+          v.style.height = '100%';
+          v.playsInline = true;
+          v.muted = true;
+          v.setAttribute('playsinline', 'true');
           v.classList?.remove?.('agora-video-player--mirror');
+          
+          // Force hardware acceleration if possible
+          v.style.transform = 'translateZ(0)';
+          v.style.webkitTransform = 'translateZ(0)';
+        }
         }
       } catch (_) {}
     }
@@ -304,13 +381,49 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         return;
       }
 
-      // Create client (rtc + h264) for low latency 1:1
-      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
+      // Create client with optimized settings for better reliability
+      const client = AgoraRTC.createClient({ 
+        mode: 'rtc', 
+        codec: 'h264',
+        // Enable audio processing for better quality
+        audioProcessing: {
+          AEC: true,
+          AGC: true,
+          ANS: true,
+          AGC2: true,
+          AEC2: true
+        }
+      });
       clientRef.current = client;
-      // Low-latency settings
-      try { await client.enableDualStream?.(); } catch (_) {}
-      try { await client.setLowStreamParameter?.({ width: 160, height: 90, frameRate: 15, bitrate: 120 }); } catch (_) {}
-      try { await client.setAudioProfile?.('speech_low_latency'); } catch (_) {}
+      
+      // Configure client with error handling
+      try { 
+        await client.enableDualStream?.(); 
+        console.log('Dual stream enabled');
+      } catch (e) { 
+        console.warn('Failed to enable dual stream:', e); 
+      }
+      
+      try { 
+        await client.setLowStreamParameter?.({
+          width: 320,
+          height: 180,
+          frameRate: 15,
+          bitrate: 200,
+          bitrateMin: 100,
+          bitrateMax: 300
+        }); 
+        console.log('Low stream parameters set');
+      } catch (e) { 
+        console.warn('Failed to set low stream parameters:', e); 
+      }
+      
+      try { 
+        await client.setAudioProfile?.('music_standard', 'speech_low_latency');
+        console.log('Audio profile set');
+      } catch (e) { 
+        console.warn('Failed to set audio profile:', e); 
+      }
 
       // Remote user handlers
       client.on('user-published', async (user, mediaType) => {
