@@ -704,7 +704,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       // Do not hard fail if permissions denied; user can still receive remote
       setIsConnecting(false);
     }
-  };
+  }, [isConnecting, isConnected, callData, videoCallAPI, setCallStatus, setIsConnecting]);
 
   // Network quality monitoring
   const checkNetworkQuality = useCallback(() => {
