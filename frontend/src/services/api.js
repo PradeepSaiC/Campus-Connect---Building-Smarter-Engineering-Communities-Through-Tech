@@ -13,14 +13,12 @@ const api = axios.create({
 // Request interceptor to add auth token
 api.interceptors.request.use(
   (config) => {
-    // Auth store persists to sessionStorage; support fallback to localStorage
-    const persisted = sessionStorage.getItem('campusconnect-auth') ?? localStorage.getItem('campusconnect-auth');
-    if (persisted) {
+    const token = localStorage.getItem('campusconnect-auth');
+    if (token) {
       try {
-        const authData = JSON.parse(persisted);
-        const bearer = authData?.state?.token || authData?.token;
-        if (bearer) {
-          config.headers.Authorization = `Bearer ${bearer}`;
+        const authData = JSON.parse(token);
+        if (authData.state?.token) {
+          config.headers.Authorization = `Bearer ${authData.state.token}`;
         }
       } catch (error) {
         console.error('Error parsing auth token:', error);
@@ -38,21 +36,9 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      try {
-        // Only redirect if not already on login to avoid loops
-        const onLogin = window.location.pathname.includes('/login');
-        if (!onLogin) {
-          // Clear persisted auth from both storages
-          try { sessionStorage.removeItem('campusconnect-auth'); } catch (_) {}
-          try { localStorage.removeItem('campusconnect-auth'); } catch (_) {}
-          const redirect = encodeURIComponent(window.location.pathname || '/');
-          window.location.href = `/login?redirect=${redirect}`;
-        }
-      } catch (_) {
-        // Fallback: best-effort cleanup without navigation
-        try { sessionStorage.removeItem('campusconnect-auth'); } catch (_) {}
-        try { localStorage.removeItem('campusconnect-auth'); } catch (_) {}
-      }
+      // Clear auth data and redirect to login
+      localStorage.removeItem('campusconnect-auth');
+      window.location.href = '/login';
     }
     return Promise.reject(error);
   }

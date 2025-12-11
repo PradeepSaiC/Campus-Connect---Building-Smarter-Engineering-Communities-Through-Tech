@@ -189,7 +189,14 @@ const VideoCallManager = () => {
       const senderId = String(data?.sender?._id || data?.senderId || '');
       // Only the caller auto-opens here; receiver already opened via Accept button
       if (myId && senderId && myId === senderId) {
-        if (data?.callId) window.open(`/call/${data.callId}?caller=1`, '_blank');
+        if (data?.callId) {
+          const q = new URLSearchParams({
+            caller: '1',
+            channel: data.channelName || '',
+            token: data.token || ''
+          });
+          window.open(`/call/${data.callId}?${q.toString()}`, '_blank');
+        }
       }
     } catch (_) {}
     setActiveCall(null);
@@ -238,23 +245,20 @@ const VideoCallManager = () => {
       const response = await videoCallAPI.acceptCall(callData.callId);
       stopRingtone();
       setIncomingCall(null);
-      // Open Call Studio immediately; it will poll credentials if needed
-      try { window.open(`/call/${callData.callId}?accept=1`, '_blank'); } catch (_) {}
+      // Open Call Studio immediately; pass credentials to avoid polling lag
+      try { 
+        const q = new URLSearchParams({
+          accept: '1',
+          channel: response?.data?.channelName || callData.channelName || '',
+          token: response?.data?.token || ''
+        });
+        window.open(`/call/${callData.callId}?${q.toString()}`, '_blank'); 
+      } catch (_) {}
       setActiveCall(null);
       notify.success('Call accepted! Opening call...', { key: `call_accepted_${callData.callId}`, ttlMs: 2000 });
     } catch (error) {
-      const status = error?.response?.status;
-      const msg = error?.response?.data?.message || error?.response?.data?.error || error?.message;
-      console.error('VCM: accept error', { status, data: error?.response?.data });
-      let userMsg = 'Failed to accept call';
-      if (status === 403) {
-        userMsg = msg || 'You are not allowed to accept this call (forbidden)';
-        // Fallback: open studio to allow credential polling if backend shares shared credentials
-        try { window.open(`/call/${callData.callId}?accept=1`, '_blank'); } catch (_) {}
-      } else if (status === 401) {
-        userMsg = 'Session expired. Please log in again.';
-      }
-      notify.error(userMsg, { key: 'accept_failed', ttlMs: 3500 });
+      console.error('VCM: accept error', { status: error?.response?.status, data: error?.response?.data });
+      notify.error('Failed to accept call', { key: 'accept_failed', ttlMs: 2500 });
     }
   };
 
@@ -309,7 +313,33 @@ const VideoCallManager = () => {
 
   // Removed history helpers
 
-  return null;
+  return (
+    <>
+      {incomingCall && (
+        <VideoCallModal
+          isOpen={true}
+          onClose={() => {
+            setIncomingCall(null);
+            stopRingtone();
+          }}
+          callData={incomingCall}
+          isIncoming={true}
+          isRinging={true}
+          onAcceptCall={handleAcceptCall}
+          onRejectCall={handleRejectCall}
+        />
+      )}
+      {activeCall && activeCall.isViewer && (
+        <LiveStreamModal
+          isOpen={true}
+          onClose={() => {
+            setActiveCall(null);
+          }}
+          callData={activeCall}
+        />
+      )}
+    </>
+  );
 };
 
 export default VideoCallManager;

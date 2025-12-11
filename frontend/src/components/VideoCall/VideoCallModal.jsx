@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Phone, PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import videoCallAPI from '../../services/videoCallAPI.js';
@@ -8,7 +8,8 @@ import useAuthStore from '../../store/authStore.js';
 const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRinging = false, onAcceptCall, onRejectCall, onEndCall }) => {
   const { user } = useAuthStore();
   
-  // State management for call controls and status
+  // Minimal runtime state kept; debug logs removed
+
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -22,65 +23,24 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     try { return localStorage.getItem('cc_camera_id') || ''; } catch (_) { return ''; }
   });
   const [cameraError, setCameraError] = useState(false);
-  const [audioError, setAudioError] = useState(false);
-  const [networkQuality, setNetworkQuality] = useState('good');
   const [selectedQuality, setSelectedQuality] = useState(() => {
-    try { return localStorage.getItem('cc_video_quality') || 'hd'; } catch (_) { return 'hd'; }
+    try { return localStorage.getItem('cc_video_quality') || 'uhd'; } catch (_) { return 'uhd'; }
   });
-  const [callStatus, setCallStatus] = useState(isIncoming ? 'incoming' : 'outgoing');
 
   const localVideoRef = useRef(null);
   const playRemoteAudio = async (track) => {
     if (!track) return;
-    
-    const playWithRetry = async (retryCount = 0) => {
-      try {
-        // Ensure track is enabled and set volume
-        await track.setEnabled(true);
-        if (typeof track.setVolume === 'function') {
-          await track.setVolume(100);
-        }
-        
-        // Try to play the track
-        await track.play();
-        console.log('Audio track is now playing');
-      } catch (playError) {
-        console.warn('Audio play error:', playError);
-        
-        // If we've retried too many times, show a message to the user
-        if (retryCount >= 2) {
-          toast('Click anywhere to enable audio', { 
-            icon: '🔊',
-            duration: 3000
-          });
-          
-          // Set up a one-time click handler to resume audio
-          const resumeAudio = async () => {
-            try {
-              await playWithRetry(0);
-            } catch (e) {
-              console.error('Failed to resume audio after click:', e);
-            }
-            window.removeEventListener('click', resumeAudio);
-          };
-          
-          window.addEventListener('click', resumeAudio, { once: true });
-          return;
-        }
-        
-        // Retry with a small delay
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await playWithRetry(retryCount + 1);
-      }
-    };
-    
+    try { await track.setEnabled(true); } catch (_) {}
+    try { await track.setVolume?.(100); } catch (_) {}
     try {
-      await playWithRetry();
+      await track.play();
     } catch (err) {
-      console.error('Error in playRemoteAudio:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'NotReadableError') {
-        toast.error('Audio permission issue. Please check your browser settings.');
-      }
+      console.warn('Audio autoplay blocked', err);
+      const resume = () => {
+        try { track.play(); } catch (_) {}
+        window.removeEventListener('click', resume);
+      };
+      window.addEventListener('click', resume, { once: true });
     }
   };
   const remoteVideoRef = useRef(null);
@@ -113,97 +73,28 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     // First attempt
     let micTrack = null;
     let camTrack = null;
-    
-    // Request audio permissions first
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Stop all tracks to release the stream
-      stream.getTracks().forEach(track => track.stop());
-    } catch (e) {
-      console.warn('Audio permission denied:', e);
-      toast.error('Microphone access is required for audio. Please allow microphone access.');
-    }
-
     try { 
       micTrack = await AgoraRTC.createMicrophoneAudioTrack({
         AEC: true,
         ANS: true,
         AGC: true,
-        encoderConfig: 'music_standard',
-        // Force audio track to be enabled
-        enabled: true
+        encoderConfig: 'music_standard'
       });
-      
       if (micTrack) {
-        try { 
-          await micTrack.setEnabled(true); 
-          console.log('Microphone track enabled');
-        } catch (e) { 
-          console.error('Failed to enable microphone track:', e);
-        }
-        try { 
-          await micTrack.setVolume(100); 
-          console.log('Microphone volume set to 100%');
-        } catch (e) { 
-          console.warn('Failed to set microphone volume:', e);
-        }
+        try { await micTrack.setEnabled(true); } catch (_) {}
+        try { await micTrack.setVolume?.(100); } catch (_) {}
         console.log('Microphone track ready with audio enhancements');
       }
     } catch (e) {
-      console.error('Failed to create microphone track:', e);
-      toast.error('Failed to access microphone. Please check your audio settings.');
+      console.warn('Failed to create microphone track:', e);
     }
     // Low-latency camera config (240p@24fps motion)
-    const cfg = {
-      // Lower resolution for better performance
-      width: 640,
-      height: 360,
-      frameRate: 24,
-      bitrateMin: 200,
-      bitrateMax: 600,
-      // Enable hardware acceleration
-      optimizationMode: 'motion',
-      // Better quality settings
-      scalabiltyMode: 'S1T3',
-      // Enable H.264 baseline profile for better compatibility
-      codec: 'h264',
-      codecConfig: {
-        width: 640,
-        height: 360,
-        frameRate: 24,
-        bitrateMin: 200,
-        bitrateMax: 600,
-        bitrate: 400,
-        // Enable temporal scalability for better adaptation
-        scalabilityMode: 'S1T3'
-      },
-      // Enable hardware acceleration
-      hwAccel: 'prefer-hardware',
-      // Better video processing
-      processing: {
-        denoise: true,
-        deinterlace: true,
-        stabilization: true
-      }
-    };
-    
-    try {
-      camTrack = await AgoraRTC.createCameraVideoTrack({
-        encoderConfig: cfg,
-        cameraId: selectedCameraId || undefined,
-        optimizationMode: 'motion',
-        // Enable hardware acceleration
-        hwAccel: 'prefer-hardware',
-        // Better video processing
-        processing: {
-          denoise: true,
-          deinterlace: true,
-          stabilization: true
-        }
-      });
-      
-      console.log('Camera track created with config:', cfg);
-    } catch (e1) {
+    const cfg = { width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 };
+    try { camTrack = await AgoraRTC.createCameraVideoTrack({
+      encoderConfig: cfg,
+      cameraId: selectedCameraId || undefined,
+      optimizationMode: 'motion'
+    }); } catch (e1) {
       // If camera is busy or fails, enumerate devices and try alternates
       try {
         const cams = await AgoraRTC.getCameras();
@@ -293,44 +184,14 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       }, 7000);
     }
     if (camTrack && localVideoRef.current) {
+      camTrack.play(localVideoRef.current, { mirror: false });
       try {
-        // Clear any existing video elements
-        while (localVideoRef.current.firstChild) {
-          localVideoRef.current.removeChild(localVideoRef.current.firstChild);
-        }
-        
-        // Play the track with optimized settings
-        await camTrack.play(localVideoRef.current, { 
-          mirror: false,
-          // Enable hardware acceleration
-          hwaccel: 'prefer-hardware',
-          // Optimize for low latency
-          optimizationMode: 'motion',
-          // Better scaling
-          objectFit: 'cover'
-        });
-        
-        // Apply additional styling for better rendering
         const v = localVideoRef.current.querySelector('video');
         if (v) {
-          v.style.transform = 'none';
-          v.style.webkitTransform = 'none';
-          v.style.objectFit = 'cover';
-          v.style.width = '100%';
-          v.style.height = '100%';
-          v.playsInline = true;
-          v.muted = true;
-          v.setAttribute('playsinline', 'true');
+          v.style.transform = 'none'; v.style.webkitTransform = 'none';
           v.classList?.remove?.('agora-video-player--mirror');
-          
-          // Force hardware acceleration if possible
-          v.style.transform = 'translateZ(0)';
-          v.style.webkitTransform = 'translateZ(0)';
         }
-      } catch (error) {
-        console.error('Error initializing video track:', error);
-        setCameraError(true);
-      }
+      } catch (_) {}
     }
     if (!camTrack) {
       setCameraError(true);
@@ -339,18 +200,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     }
   };
 
-  const qualityToConfig = (q) => {
-    switch (q) {
-      case 'sd':
-        return { width: 426, height: 240, frameRate: 24, bitrateMin: 200, bitrateMax: 700 };
-      case 'hd':
-        return { width: 1280, height: 720, frameRate: 24, bitrateMin: 800, bitrateMax: 2200 };
-      case 'fullhd':
-        return { width: 1920, height: 1080, frameRate: 30, bitrateMin: 1500, bitrateMax: 3500 };
-      default:
-        return { width: 640, height: 360, frameRate: 24, bitrateMin: 300, bitrateMax: 1200 };
-    }
-  };
+  const qualityToConfig = () => ({ width: 426, height: 240, frameRate: 24, bitrateMin: 280, bitrateMax: 700 });
 
   const applyQuality = async (q) => {
     try { localStorage.setItem('cc_video_quality', q); } catch (_) {}
@@ -380,19 +230,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     }
   };
 
-  const joinAndSetup = useCallback(async () => {
-    if (isConnecting || isConnected) return;
-    
+  const joinAndSetup = async () => {
     try {
       if (!callData?.channelName || !callData?.token) {
         console.warn('VCMdl: Missing credentials to join');
-        toast.error('Missing call credentials. Please try again.');
         return;
       }
-      
-      setCallStatus('connecting');
       setIsConnecting(true);
-      
       // Get Agora App ID
       const cred = await videoCallAPI.getCredentials();
       const appId = cred?.data?.appId;
@@ -402,49 +246,13 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         return;
       }
 
-      // Create client with optimized settings for better reliability
-      const client = AgoraRTC.createClient({ 
-        mode: 'rtc', 
-        codec: 'h264',
-        // Enable audio processing for better quality
-        audioProcessing: {
-          AEC: true,
-          AGC: true,
-          ANS: true,
-          AGC2: true,
-          AEC2: true
-        }
-      });
+      // Create client (rtc + h264) for low latency 1:1
+      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
       clientRef.current = client;
-      
-      // Configure client with error handling
-      try { 
-        await client.enableDualStream?.(); 
-        console.log('Dual stream enabled');
-      } catch (e) { 
-        console.warn('Failed to enable dual stream:', e); 
-      }
-      
-      try { 
-        await client.setLowStreamParameter?.({
-          width: 320,
-          height: 180,
-          frameRate: 15,
-          bitrate: 200,
-          bitrateMin: 100,
-          bitrateMax: 300
-        }); 
-        console.log('Low stream parameters set');
-      } catch (e) { 
-        console.warn('Failed to set low stream parameters:', e); 
-      }
-      
-      try { 
-        await client.setAudioProfile?.('music_standard', 'speech_low_latency');
-        console.log('Audio profile set');
-      } catch (e) { 
-        console.warn('Failed to set audio profile:', e); 
-      }
+      // Low-latency settings
+      try { await client.enableDualStream?.(); } catch (_) {}
+      try { await client.setLowStreamParameter?.({ width: 160, height: 90, frameRate: 15, bitrate: 120 }); } catch (_) {}
+      try { await client.setAudioProfile?.('speech_low_latency'); } catch (_) {}
 
       // Remote user handlers
       client.on('user-published', async (user, mediaType) => {
@@ -715,58 +523,14 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       // Do not hard fail if permissions denied; user can still receive remote
       setIsConnecting(false);
     }
-  }, [isConnecting, isConnected, callData, videoCallAPI, setCallStatus, setIsConnecting]);
+  };
 
-  // Network quality monitoring
-  const checkNetworkQuality = useCallback(() => {
-    const client = clientRef.current;
-    if (!client) return;
-    
+  const cleanupCall = async () => {
     try {
-      const stats = client.getRTCStats();
-      // Simple network quality check based on packet loss and RTT
-      if (stats?.RTT > 500 || stats?.packetLossRatio > 0.1) {
-        setNetworkQuality('poor');
-        // Automatically reduce quality if network is poor
-        if (selectedQuality !== 'sd') {
-          // Use the qualityToConfig function directly instead of applyQuality to avoid circular dependencies
-          const cfg = { width: 640, height: 360, frameRate: 20, bitrateMin: 200, bitrateMax: 400 };
-          const v = localTracksRef.current.video;
-          if (v && typeof v.setEncoderConfiguration === 'function') {
-            v.setEncoderConfiguration(cfg).catch(console.error);
-          }
-          setSelectedQuality('sd');
-          try { localStorage.setItem('cc_video_quality', 'sd'); } catch (_) {}
-        }
-      } else {
-        setNetworkQuality('good');
+      if (durationTimerRef.current) {
+        clearInterval(durationTimerRef.current);
+        durationTimerRef.current = null;
       }
-    } catch (e) {
-      console.warn('Error checking network quality:', e);
-    }
-  }, [selectedQuality]);
-
-  useEffect(() => {
-    if (!isConnected) return;
-    
-    const qualityInterval = setInterval(checkNetworkQuality, 5000);
-    return () => clearInterval(qualityInterval);
-  }, [isConnected, checkNetworkQuality]);
-
-  const cleanupCall = useCallback(async () => {
-    try {
-      setCallStatus('disconnecting');
-      
-      // Clear all timers
-      const clearTimer = (timerRef) => {
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-          clearTimeout(timerRef.current);
-          timerRef.current = null;
-        }
-      };
-      
-      [durationTimerRef, resubTimerRef, republishTimerRef, replaceTimerRef, audioHealthTimerRef].forEach(clearTimer);
       if (resubTimerRef.current) {
         clearInterval(resubTimerRef.current);
         resubTimerRef.current = null;
@@ -804,7 +568,7 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     } catch (e) {
       console.warn('VCMdl: cleanup error', e);
     }
-  }, [setCallStatus, setIsConnected, setLocalStream, setRemoteStream, setParticipantCount, setDuration]);
+  };
 
   // Auto-join when credentials are present and modal is open
   useEffect(() => {
@@ -813,12 +577,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       cleanupCall();
       return;
     }
-    
-    // Reset states when modal opens
-    setCallStatus(isIncoming ? 'incoming' : 'outgoing');
-    setNetworkQuality('good');
-    setAudioError(false);
-    setCameraError(false);
     if (callData?.token && callData?.channelName) {
       joinAndSetup();
     }
@@ -1032,100 +790,41 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
     ? getDisplayName(callData?.caller)
     : getDisplayName(callData?.receiver);
 
-  // Get call status text
-  const getStatusText = () => {
-    switch (callStatus) {
-      case 'connecting':
-        return 'Connecting...';
-      case 'connected':
-        return 'In Call';
-      case 'disconnecting':
-        return 'Ending call...';
-      case 'incoming':
-        return 'Incoming Call';
-      case 'outgoing':
-        return 'Calling...';
-      default:
-        return 'Call';
-    }
-  };
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center p-4">
-      <div className={`bg-white rounded-xl shadow-xl w-full max-w-4xl overflow-hidden transition-all duration-300 ${
-        callStatus === 'connected' ? 'ring-2 ring-green-500' : ''
-      }`}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-gray-900">
-                {getStatusText()}
-              </h2>
-              {networkQuality === 'poor' && (
-                <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded-full">
-                  Poor Connection
-                </span>
-              )}
-              {audioError && (
-                <span className="px-2 py-0.5 text-xs bg-red-100 text-red-800 rounded-full">
-                  Audio Issue
-                </span>
-              )}
-            </div>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {isIncoming && !callData?.token ? 'Incoming Call' : isConnected ? 'In Call' : 'Calling...'}
+            </h2>
             <p className="text-sm text-gray-600">
               {isIncoming ? `From ${otherName}` : `To ${otherName}`}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Camera and quality controls */}
-            <div className="flex items-center gap-2">
-              {cameras && cameras.length > 0 && (
-                <select
-                  value={selectedCameraId}
-                  onChange={(e) => switchCamera(e.target.value)}
-                  className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
-                  title="Select camera"
-                  disabled={isConnecting}
-                >
-                  {cameras.map((c) => (
-                    <option key={c.deviceId} value={c.deviceId}>
-                      {c.label || `Camera ${c.deviceId.slice(0, 4)}`}
-                    </option>
-                  ))}
-                </select>
-              )}
-              
+            {/* Camera selector */}
+            {cameras && cameras.length > 0 && (
               <select
-                value={selectedQuality}
-                onChange={(e) => applyQuality(e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm bg-white"
-                title="Video quality"
-                disabled={isConnecting}
+                value={selectedCameraId}
+                onChange={(e) => switchCamera(e.target.value)}
+                className="px-2 py-1 border border-gray-300 rounded text-sm"
+                title="Select camera"
               >
-                <option value="sd">SD (480p)</option>
-                <option value="hd">HD (720p)</option>
-                <option value="fhd">Full HD (1080p)</option>
+                {cameras.map((c) => (
+                  <option key={c.deviceId} value={c.deviceId}>{c.label || 'Camera'}</option>
+                ))}
               </select>
-              
-              <button
-                onClick={useScreenAsVideo}
-                className={`px-2 py-1 text-sm rounded border ${
-                  cameraError 
-                    ? 'border-red-500 text-red-600 bg-red-50' 
-                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                } transition-colors`}
-                title="Share your screen"
-                disabled={isConnecting}
-              >
-                <span className="flex items-center gap-1">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                  {cameraError ? 'Screen Only' : 'Share Screen'}
-                </span>
-              </button>
-            </div>
+            )}
+            {/* Screen fallback */}
+            <button
+              onClick={useScreenAsVideo}
+              className={`px-2 py-1 text-sm rounded border ${cameraError ? 'border-red-500 text-red-600' : 'border-gray-300 text-gray-700'} hover:bg-gray-100`}
+              title="Use screen as video"
+            >
+              {cameraError ? 'Use Screen as Video (camera busy)' : 'Use Screen as Video'}
+            </button>
             <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors duration-200">
               <X className="w-5 h-5 text-gray-500" />
             </button>

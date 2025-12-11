@@ -24,26 +24,19 @@ const CollegesList = () => {
   const [selectedStudentData, setSelectedStudentData] = useState(null);
 
   useEffect(() => {
-    const mountedRef = { current: true };
-    const load = async () => {
-      await fetchColleges(mountedRef);
-    };
-    load();
-    return () => { mountedRef.current = false; };
+    fetchColleges();
   }, []);
 
-  const fetchColleges = async (mountedRef) => {
+  const fetchColleges = async () => {
     try {
-      if (!mountedRef || mountedRef.current) setLoading(true);
+      setLoading(true);
       const response = await collegeAPI.getAll();
-      if (!mountedRef || mountedRef.current) setColleges(response.data || []);
+      setColleges(response.data);
     } catch (error) {
       console.error('Error fetching colleges:', error);
-      if (!(error?.response?.status === 401)) {
-        if (!mountedRef || mountedRef.current) toast.error('❌ Failed to load colleges');
-      }
+      toast.error('❌ Failed to load colleges');
     } finally {
-      if (!mountedRef || mountedRef.current) setLoading(false);
+      setLoading(false);
     }
   };
 

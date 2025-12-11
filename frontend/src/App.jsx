@@ -1,5 +1,4 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
 import { Toaster } from 'react-hot-toast';
 import useAuthStore from './store/authStore.js';
 import LoginForm from './components/Auth/LoginForm.jsx';
@@ -14,55 +13,13 @@ import './App.css';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuthStore();
-  const [hydrating, setHydrating] = useState(true);
-
-  useEffect(() => {
-    // Consider hydration done when either authenticated or no persisted auth exists
-    const persisted = sessionStorage.getItem('campusconnect-auth') ?? localStorage.getItem('campusconnect-auth');
-    if (isAuthenticated || !persisted) {
-      setHydrating(false);
-      return;
-    }
-    // Delay one tick to allow zustand to rehydrate from sessionStorage
-    const t = setTimeout(() => setHydrating(false), 50);
-    return () => clearTimeout(t);
-  }, [isAuthenticated]);
-
-  if (isLoading || hydrating) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  return isAuthenticated ? children : <Navigate to="/login" replace state={{ from: window.location.pathname }} />;
+  const { isAuthenticated } = useAuthStore();
+  return isAuthenticated ? children : <Navigate to="/login" replace />;
 };
 
 // Public Route Component (redirects to dashboard if already authenticated)
 const PublicRoute = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuthStore();
-  const [hydrating, setHydrating] = useState(true);
-
-  useEffect(() => {
-    const persisted = sessionStorage.getItem('campusconnect-auth') ?? localStorage.getItem('campusconnect-auth');
-    if (isAuthenticated || !persisted) {
-      setHydrating(false);
-      return;
-    }
-    const t = setTimeout(() => setHydrating(false), 50);
-    return () => clearTimeout(t);
-  }, [isAuthenticated]);
-
-  if (isLoading || hydrating) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
+  const { isAuthenticated } = useAuthStore();
   return isAuthenticated ? <Navigate to="/dashboard" replace /> : children;
 };
 
@@ -153,7 +110,11 @@ function App() {
           />
           <Route 
             path="/call/:callId" 
-            element={<CallStudio />} 
+            element={
+              <ProtectedRoute>
+                <CallStudio />
+              </ProtectedRoute>
+            } 
           />
           
           {/* Public Landing */}

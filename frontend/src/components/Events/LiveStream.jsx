@@ -55,50 +55,17 @@ const LiveStream = () => {
     const container = videoRef.current;
   const playRemoteAudio = async (track) => {
     if (!track) return;
-    
+    try { await track.setEnabled(true); } catch (_) {}
+    try { await track.setVolume?.(100); } catch (_) {}
     try {
-      // First ensure the track is enabled
-      await track.setEnabled(true);
-      
-      // Set volume to 100%
-      if (typeof track.setVolume === 'function') {
-        await track.setVolume(100);
-      }
-      
-      // Create an audio element if not already playing
-      if (!track.isPlaying) {
-        try {
-          // Try to play the track
-          await track.play();
-          console.log('[LIVE:UI] Audio track is now playing');
-        } catch (playError) {
-          console.warn('[LIVE:UI] Audio autoplay blocked:', playError);
-          // Show a message to the user
-          toast('Click anywhere to enable audio', { 
-            icon: '🔊',
-            duration: 3000
-          });
-          
-          // Set up a one-time click handler to resume audio
-          const resumeAudio = async () => {
-            try {
-              await track.play();
-              console.log('[LIVE:UI] Audio resumed after user interaction');
-            } catch (e) {
-              console.error('[LIVE:UI] Failed to resume audio:', e);
-            }
-            window.removeEventListener('click', resumeAudio);
-          };
-          
-          window.addEventListener('click', resumeAudio, { once: true });
-        }
-      }
+      await track.play();
     } catch (err) {
-      console.error('[LIVE:UI] Error in playRemoteAudio:', err);
-      // Try to recover by recreating the audio track if possible
-      if (err.name === 'NotAllowedError' || err.name === 'NotReadableError') {
-        toast.error('Audio permission issue. Please check your browser settings.');
-      }
+      console.warn('[LIVE:UI] audio autoplay blocked', err);
+      const resume = () => {
+        try { track.play(); } catch (_) {}
+        window.removeEventListener('click', resume);
+      };
+      window.addEventListener('click', resume, { once: true });
     }
   };
     if (!container || !track) return;
@@ -211,10 +178,12 @@ const LiveStream = () => {
             return;
           }
           if (mediaType === 'audio') {
-            // Play audio only for the active remote video publisher (if chosen), else ignore
-            if (remoteActiveUidRef.current && remoteActiveUidRef.current !== uid) {
-              return;
-            }
+        // Always allow audio; if no active video yet, claim this uid for audio-first publish
+        if (!remoteActiveUidRef.current) {
+          remoteActiveUidRef.current = uid;
+        } else if (remoteActiveUidRef.current !== uid) {
+          return;
+        }
             try { 
               await c.subscribe(user, 'audio'); 
               if (user.audioTrack) {

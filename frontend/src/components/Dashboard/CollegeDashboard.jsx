@@ -104,74 +104,70 @@ const CollegeDashboard = () => {
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
       }`}>
         <div className="flex flex-col h-full">
-          {/* Header - Fixed */}
-          <div className="shrink-0">
-            <div className="flex items-center justify-between p-6 border-b border-base-200">
-              <div className="flex items-center space-x-3">
-                <img src={logo} alt="CampusConnect" className="w-8 h-8" />
-                <h1 className="text-xl font-bold">CampusConnect</h1>
-              </div>
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="lg:hidden p-2 rounded-lg hover:bg-base-200"
-              >
-                <X className="w-5 h-5 opacity-70" />
-              </button>
+          {/* Header */}
+          <div className="flex items-center justify-between p-6 border-b border-base-200">
+            <div className="flex items-center space-x-3">
+              <img src={logo} alt="CampusConnect" className="w-8 h-8" />
+              <h1 className="text-xl font-bold">CampusConnect</h1>
             </div>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="lg:hidden p-2 rounded-lg hover:bg-base-200"
+            >
+              <X className="w-5 h-5 opacity-70" />
+            </button>
+          </div>
 
-            {/* User Info */}
-            <div className="p-6 border-b border-base-200">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-base-300 rounded-full flex items-center justify-center overflow-hidden">
-                  {user?.collegeLogo ? (
-                    <img src={user.collegeLogo} alt={user?.collegeName || 'Logo'} className="w-full h-full object-cover" />
-                  ) : (
-                    <Building className="w-5 h-5 opacity-70" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {user?.collegeName}
-                  </p>
-                  <p className="text-xs opacity-70 truncate">
-                    {user?.adminName}
-                  </p>
-                  <p className="text-xs opacity-70 truncate">
-                    Administrator
-                  </p>
-                </div>
+          {/* User Info */}
+          <div className="p-6 border-b border-base-200">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-base-300 rounded-full flex items-center justify-center overflow-hidden">
+                {user?.collegeLogo ? (
+                  <img src={user.collegeLogo} alt={user?.collegeName || 'Logo'} className="w-full h-full object-cover" />
+                ) : (
+                  <Building className="w-5 h-5 opacity-70" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">
+                  {user?.collegeName}
+                </p>
+                <p className="text-xs opacity-70 truncate">
+                  {user?.adminName}
+                </p>
+                <p className="text-xs opacity-70 truncate">
+                  Administrator
+                </p>
               </div>
             </div>
           </div>
 
-          {/* Scrollable Navigation */}
-          <div className="flex-1 overflow-y-auto">
-            <nav className="p-4 space-y-2">
-              {menuItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActiveTab(item.id);
-                      setSidebarOpen(false);
-                    }}
-                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-                      activeTab === item.id
-                        ? 'bg-primary-50 text-primary-700 border-r-2 border-primary-600 shadow-sm'
-                        : 'hover:bg-base-200 hover:shadow-sm'
-                    }`}
-                  >
-                    <Icon className={`w-5 h-5 ${activeTab === item.id ? 'opacity-100' : 'opacity-60'}`} />
-                    <span className="font-medium">{item.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-          </div>
+          {/* Navigation */}
+          <nav className="flex-1 p-4 space-y-2">
+            {menuItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setActiveTab(item.id);
+                    setSidebarOpen(false);
+                  }}
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 ${
+                    activeTab === item.id
+                      ? 'bg-base-200 border-r-2 border-indigo-400'
+                      : 'hover:bg-base-200'
+                  }`}
+                >
+                  <Icon className={`w-5 h-5 ${activeTab === item.id ? '' : 'opacity-60'}`} />
+                  <span className="font-medium">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
 
-          {/* Footer - Fixed */}
-          <div className="shrink-0 p-4 border-t border-base-200 bg-base-100">
+          {/* Footer */}
+          <div className="p-4 border-t border-base-200">
             <button
               onClick={handleLogout}
               className="w-full flex items-center space-x-3 px-4 py-3 hover:bg-base-200 rounded-lg transition-colors duration-200"
