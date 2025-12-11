@@ -558,8 +558,22 @@ const CallStudio = () => {
   };
 
   const toggleMute = async () => {
-    const t = localTracks.current.audio; if (!t) return;
-    const next = !muted; await t.setEnabled(!next); setMuted(next);
+    const t = localTracks.current.audio;
+    const client = clientRef.current;
+    if (!t || !client) return;
+    const next = !muted;
+    try {
+      if (next) {
+        // Mute: fully stop publishing local audio so no packets are sent
+        try { await client.unpublish(t); } catch (_) {}
+        try { await t.setEnabled(false); } catch (_) {}
+      } else {
+        // Unmute: re-enable and re-publish local audio
+        try { await t.setEnabled(true); } catch (_) {}
+        try { await client.publish(t); } catch (_) {}
+      }
+      setMuted(next);
+    } catch (_) {}
   };
   const toggleVideo = async () => {
     const t = localTracks.current.video; if (!t) return;
