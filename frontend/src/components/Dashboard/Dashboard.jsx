@@ -40,10 +40,8 @@ const Dashboard = () => {
   const [selectedCollegeId, setSelectedCollegeId] = useState('');
 
   useEffect(() => {
-    if (!user || !token) {
-      navigate('/login');
-      return;
-    }
+    // Only attempt connection when token is present
+    if (!token || !user) return;
 
     // Connect to socket
     socketService.connect(token);
@@ -52,7 +50,7 @@ const Dashboard = () => {
     socketService.joinRoom(`user_${user.id}`);
 
     return () => {};
-  }, [user, token, navigate]);
+  }, [user, token]);
 
   const fetchRequestCounts = useCallback(async () => {
     try {
