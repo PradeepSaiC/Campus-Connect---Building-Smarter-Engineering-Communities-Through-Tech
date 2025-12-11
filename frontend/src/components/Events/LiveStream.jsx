@@ -21,7 +21,6 @@ const LiveStream = () => {
   const [collegeName, setCollegeName] = useState('');
   const [localTracks, setLocalTracks] = useState({ audio: null, video: null });
   const [prevCamTrack, setPrevCamTrack] = useState(null);
-  const screenAudioTrackRef = useRef(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [startingShare, setStartingShare] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -51,7 +50,9 @@ const LiveStream = () => {
   const lastPlayedTrackIdRef = useRef('');
   const remoteActiveUidRef = useRef('');
 
-  // Play remote audio with autoplay fallback
+  // Helper: clear container and play track with consistent styles to avoid duplicated renders
+  const playIntoContainer = (track) => {
+    const container = videoRef.current;
   const playRemoteAudio = async (track) => {
     if (!track) return;
     try { await track.setEnabled(true); } catch (_) {}
@@ -67,10 +68,6 @@ const LiveStream = () => {
       window.addEventListener('click', resume, { once: true });
     }
   };
-
-  // Helper: clear container and play track with consistent styles to avoid duplicated renders
-  const playIntoContainer = (track) => {
-    const container = videoRef.current;
     if (!container || !track) return;
     try {
       const mt = track.getMediaStreamTrack?.();
@@ -717,18 +714,10 @@ const LiveStream = () => {
         return;
       }
       setStartingShare(true);
-      // Try to capture screen with system audio when supported; fallback to video-only
-      let screenTrackObj = null;
-      try {
-        screenTrackObj = await AgoraRTC.createScreenVideoTrack({ withAudio: 'auto' });
-      } catch (_) {
-        try { screenTrackObj = await AgoraRTC.createScreenVideoTrack({ withAudio: true }); } catch (__) {
-          screenTrackObj = await AgoraRTC.createScreenVideoTrack({ withAudio: false });
-        }
-      }
-      const screenVideoTrack = Array.isArray(screenTrackObj) ? screenTrackObj[0] : screenTrackObj;
-      const screenAudioTrack = Array.isArray(screenTrackObj) ? (screenTrackObj[1] || null) : null;
-      if (screenVideoTrack) {
+      // Request video-only screen capture for Firefox compatibility
+      let screenTrackObj = await AgoraRTC.createScreenVideoTrack({ withAudio: false });
+      const screenTrack = Array.isArray(screenTrackObj) ? screenTrackObj[0] : screenTrackObj;
+      if (screenTrack) {
         // keep previous camera to restore later
         setPrevCamTrack(currentVideo || null);
         if (currentVideo) {
@@ -736,24 +725,22 @@ const LiveStream = () => {
           // Stop rendering locally but DO NOT close; we'll restore and publish it later
           try { currentVideo.stop?.(); } catch (_) {}
         }
-        const toPub = [screenVideoTrack];
-        if (screenAudioTrack) { screenAudioTrackRef.current = screenAudioTrack; toPub.push(screenAudioTrack); }
-        try { await c.publish(toPub); } catch (_) {}
-        setLocalTracks({ audio: localTracks.audio, video: screenVideoTrack });
+        try { await c.publish([screenTrack]); } catch (_) {}
+        setLocalTracks({ audio: localTracks.audio, video: screenTrack });
         setIsScreenSharing(true);
         if (videoRef.current) {
           if (currentVideo) {
             try { currentVideo.stop?.(); } catch (_) {}
           }
-          playIntoContainer(screenVideoTrack);
+          playIntoContainer(screenTrack);
         }
         // when user stops from browser UI, restore camera
         try {
-          screenVideoTrack.on('track-ended', async () => {
+          screenTrack.on('track-ended', async () => {
             await stopShare();
           });
         } catch (_) {
-          try { screenVideoTrack.onended = async () => { await stopShare(); }; } catch (_) {}
+          try { screenTrack.onended = async () => { await stopShare(); }; } catch (_) {}
         }
       }
     } catch (e) {
@@ -788,13 +775,6 @@ const LiveStream = () => {
         try { currentVideo.stop?.(); } catch (_) {}
         try { currentVideo.close?.(); } catch (_) {}
         console.log('[LIVE:UI] stopShare: screen track unpublished and closed');
-      }
-      // Unpublish and close any screen audio track
-      if (screenAudioTrackRef.current) {
-        try { await c.unpublish([screenAudioTrackRef.current]); } catch (_) {}
-        try { screenAudioTrackRef.current.stop?.(); } catch (_) {}
-        try { screenAudioTrackRef.current.close?.(); } catch (_) {}
-        screenAudioTrackRef.current = null;
       }
       // restore previous camera or create a new one
       let cam = prevCamTrack;

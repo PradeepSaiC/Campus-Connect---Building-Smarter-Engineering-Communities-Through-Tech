@@ -14,7 +14,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
-  const [needsAudioResume, setNeedsAudioResume] = useState(false);
   const [participantCount, setParticipantCount] = useState(1);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -37,13 +36,11 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       await track.play();
     } catch (err) {
       console.warn('Audio autoplay blocked', err);
-      setNeedsAudioResume(true);
-      if (!resumeListenerAttachedRef.current) {
-        const handler = async () => { try { await resumeAllRemoteAudio(); } catch (_) {} };
-        document.addEventListener('click', handler, { once: true });
-        document.addEventListener('keydown', handler, { once: true });
-        resumeListenerAttachedRef.current = true;
-      }
+      const resume = () => {
+        try { track.play(); } catch (_) {}
+        window.removeEventListener('click', resume);
+      };
+      window.addEventListener('click', resume, { once: true });
     }
   };
   const remoteVideoRef = useRef(null);
@@ -55,56 +52,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const replaceTimerRef = useRef(null);
   const audioHealthTimerRef = useRef(null);
   const prewarmRequestedRef = useRef(false);
-  const resumeListenerAttachedRef = useRef(false);
-
-  // Mute/unmute all remote audio tracks (speaker control)
-  const setAllRemoteAudioMuted = async (muted) => {
-    try {
-      const client = clientRef.current;
-      const users = client?.remoteUsers || [];
-      for (const u of users) {
-        const t = u.audioTrack;
-        if (!t) continue;
-        try {
-          if (typeof t.setVolume === 'function') { await t.setVolume(muted ? 0 : 100); } else { await t.setEnabled(!muted); }
-        } catch (_) {}
-        if (!muted) {
-          try { await t.play(); } catch (_) {}
-        }
-      }
-      const at = remoteStream?.audioTrack;
-      if (at) {
-        try {
-          if (typeof at.setVolume === 'function') { await at.setVolume(muted ? 0 : 100); } else { await at.setEnabled(!muted); }
-        } catch (_) {}
-        if (!muted) { try { await at.play(); } catch (_) {} }
-      }
-    } catch (_) {}
-  };
-
-
-  // Resume all remote audio after user gesture (autoplay fix)
-  const resumeAllRemoteAudio = async () => {
-    try {
-      const client = clientRef.current;
-      const users = client?.remoteUsers || [];
-      for (const u of users) {
-        const t = u.audioTrack;
-        if (!t) continue;
-        try { await t.setEnabled(true); } catch (_) {}
-        try { await t.setVolume?.(100); } catch (_) {}
-        try { await t.play(); } catch (_) {}
-      }
-      const at = remoteStream?.audioTrack;
-      if (at) {
-        try { await at.setEnabled(true); } catch (_) {}
-        try { await at.setVolume?.(100); } catch (_) {}
-        try { await at.play(); } catch (_) {}
-      }
-    } catch (_) {}
-    setNeedsAudioResume(false);
-    resumeListenerAttachedRef.current = false;
-  };
 
   useEffect(() => {
     if (isOpen && !prewarmRequestedRef.current) {
@@ -341,11 +288,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
               } catch (e) {
                 console.error('Error playing video track:', e);
               }
-            }
-            // Also ensure audio is subscribed and playing when video arrives
-            try { await client.subscribe(user, 'audio'); } catch (_) {}
-            if (user.audioTrack) {
-              try { await playRemoteAudio(user.audioTrack); } catch (_) {}
             }
           }
           
@@ -924,31 +866,12 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
             <>
               <button
                 onClick={async () => {
-                  const client = clientRef.current;
-                  let t = localTracksRef.current.audio;
-                  const turningOff = !isMuted; // current ON -> OFF
+                  const t = localTracksRef.current.audio;
+                  if (!t) return;
+                  const newMutedState = !isMuted;
                   try {
-                    if (turningOff) {
-                      if (t) {
-                        try { await client?.unpublish?.([t]); } catch (_) {}
-                        try { await t.setEnabled(false); } catch (_) {}
-                      }
-                      setIsMuted(true);
-                    } else {
-                      // Turning ON
-                      if (!t) {
-                        try {
-                          t = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true, encoderConfig: 'speech_standard' });
-                          localTracksRef.current.audio = t;
-                        } catch (err) {
-                          toast.error('Microphone not available');
-                          return;
-                        }
-                      }
-                      try { await t.setEnabled(true); } catch (_) {}
-                      try { await client?.publish?.([t]); } catch (_) {}
-                      setIsMuted(false);
-                    }
+                    await t.setEnabled(!newMutedState); // Enable when not muted, disable when muted
+                    setIsMuted(newMutedState);
                   } catch (e) {
                     console.error('Error toggling microphone:', e);
                     toast.error('Failed to toggle microphone');
@@ -959,19 +882,6 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
                 }`}
               >
                 {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-              </button>
-
-              <button
-                onClick={async () => {
-                  const next = !speakerMuted;
-                  setSpeakerMuted(next);
-                  await setAllRemoteAudioMuted(next);
-                }}
-                className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                  speakerMuted ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                {speakerMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
               </button>
 
               <button

@@ -75,8 +75,6 @@ const CallStudio = () => {
     return div;
   };
 
-  // no speaker control; always play remote audio at normal volume
-
   useEffect(() => {
     // Ensure socket is connected in the call tab so call_ended reaches this window
     if (tokenFromStorage) {
@@ -95,17 +93,8 @@ const CallStudio = () => {
       socketService.socket?.on('call_ended', handler);
       socketHandlerRef.current = handler;
     } catch (_) {}
-    // Also handle rejection
-    const rejectHandler = () => {
-      setJoinStatus('Call rejected');
-      setTimeout(() => {
-        try { window.close(); } catch (_) {}
-      }, 500);
-    };
-    try { socketService.socket?.on('call_rejected', rejectHandler); } catch (_) {}
     return () => {
       try { socketService.socket?.off('call_ended', handler); } catch (_) {}
-      try { socketService.socket?.off('call_rejected', rejectHandler); } catch (_) {}
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId]);
@@ -123,10 +112,6 @@ const CallStudio = () => {
         let token = prefilledToken || null;
         let uidFromServer = null;
         let tries = 0;
-        // While waiting for accept, show Ringing
-        if (!channelName || !token) {
-          setJoinStatus('Ringing...');
-        }
         if (isAcceptFlow && !isCaller) {
           // If opened via Accept button, fetch receiver-specific credentials first
           try {
@@ -236,8 +221,7 @@ const CallStudio = () => {
             remoteUsersRef.current.set(uid, { ...prev, videoTrack: user.videoTrack, audioTrack: user.audioTrack });
             const div = ensureRemoteContainer(uid);
             if (div) playInto(user.videoTrack, div);
-            // Proactively subscribe to audio as well and play
-            try { await client.subscribe(user, 'audio'); } catch (_) {}
+            // If audio track exists alongside video, ensure it plays
             if (user.audioTrack) { await safePlayAudio(user.audioTrack); }
           }
           if (mediaType === 'audio') {
@@ -574,50 +558,13 @@ const CallStudio = () => {
   };
 
   const toggleMute = async () => {
-    const client = clientRef.current;
-    const t = localTracks.current.audio;
-    const next = !muted;
-    try {
-      if (next) {
-        // Turning mic OFF
-        if (t) {
-          if (client) { try { await client.unpublish([t]); } catch (_) {} }
-          await t.setEnabled(false);
-        }
-        setMuted(true);
-      } else {
-        // Turning mic ON
-        if (!t) {
-          try {
-            const mic = await AgoraRTC.createMicrophoneAudioTrack({
-              AEC: true,
-              ANS: true,
-              AGC: true,
-              encoderConfig: 'speech_standard'
-            });
-            try { await mic.setEnabled(true); } catch (_) {}
-            localTracks.current.audio = mic;
-            if (client) {
-              try { await client.publish([mic]); } catch (_) {}
-            }
-          } catch (e) {
-            toast.error('Unable to access microphone');
-            return;
-          }
-        } else {
-          await t.setEnabled(true);
-          if (client) { try { await client.publish([t]); } catch (_) {} }
-        }
-        setMuted(false);
-      }
-    } catch (_) {}
+    const t = localTracks.current.audio; if (!t) return;
+    const next = !muted; await t.setEnabled(!next); setMuted(next);
   };
   const toggleVideo = async () => {
     const t = localTracks.current.video; if (!t) return;
     const next = !videoOff; await t.setEnabled(!next); setVideoOff(next);
   };
-
-  // no speaker toggle; mic toggle controls only outgoing audio
 
   const toggleScreenShare = async () => {
     try {
