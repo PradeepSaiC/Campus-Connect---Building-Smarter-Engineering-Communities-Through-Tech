@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Phone, Video, PhoneOff } from 'lucide-react';
+import VideoCallModal from './VideoCallModal.jsx';
+import LiveStreamModal from './LiveStreamModal.jsx';
 import videoCallAPI from '../../services/videoCallAPI.js';
 import { toast } from 'react-hot-toast';
 import notify from '../../services/notify.js';
@@ -8,7 +9,6 @@ import useAuthStore from '../../store/authStore.js';
 import socketService from '../../services/socket.js';
 
 const VideoCallManager = () => {
-  const navigate = useNavigate();
   const { user, token } = useAuthStore();
   const [incomingCall, setIncomingCall] = useState(null);
   const [activeCall, setActiveCall] = useState(null);
@@ -187,9 +187,16 @@ const VideoCallManager = () => {
       const me = useAuthStore.getState().user;
       const myId = String(me?._id || me?.id || '');
       const senderId = String(data?.sender?._id || data?.senderId || '');
-      // Navigate to call page in same tab
-      if (data?.callId) {
-        navigate(`/call/${data.callId}`);
+      // Only the caller auto-opens here; receiver already opened via Accept button
+      if (myId && senderId && myId === senderId) {
+        if (data?.callId) {
+          const q = new URLSearchParams({
+            caller: '1',
+            channel: data.channelName || '',
+            token: data.token || ''
+          });
+          window.open(`/call/${data.callId}?${q.toString()}`, '_blank');
+        }
       }
     } catch (_) {}
     setActiveCall(null);
@@ -238,8 +245,15 @@ const VideoCallManager = () => {
       const response = await videoCallAPI.acceptCall(callData.callId);
       stopRingtone();
       setIncomingCall(null);
-      // Navigate to call page in same tab
-      navigate(`/call/${callData.callId}`);
+      // Open Call Studio immediately; pass credentials to avoid polling lag
+      try { 
+        const q = new URLSearchParams({
+          accept: '1',
+          channel: response?.data?.channelName || callData.channelName || '',
+          token: response?.data?.token || ''
+        });
+        window.open(`/call/${callData.callId}?${q.toString()}`, '_blank'); 
+      } catch (_) {}
       setActiveCall(null);
       notify.success('Call accepted! Opening call...', { key: `call_accepted_${callData.callId}`, ttlMs: 2000 });
     } catch (error) {

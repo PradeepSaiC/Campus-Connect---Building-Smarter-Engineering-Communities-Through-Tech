@@ -6,8 +6,8 @@ import RegisterForm from './components/Auth/RegisterForm.jsx';
 import CollegeLoginForm from './components/Auth/CollegeLoginForm.jsx';
 import CollegeRegisterForm from './components/Auth/CollegeRegisterForm.jsx';
 import Dashboard from './components/Dashboard/Dashboard.jsx';
-import LiveStreamNew from './components/VideoCall/LiveStreamNew.jsx';
-import VideoCallNew from './components/VideoCall/VideoCallNew.jsx';
+import LiveStream from './components/Events/LiveStream.jsx';
+import CallStudio from './components/VideoCall/CallStudio.jsx';
 import Landing from './components/Landing/Landing.jsx';
 import './App.css';
 
@@ -105,20 +105,12 @@ function App() {
             } 
           />
           <Route 
-            path="/live/:streamId" 
-            element={
-              <ProtectedRoute>
-                <LiveStreamNew />
-              </ProtectedRoute>
-            } 
+            path="/live/:eventId" 
+            element={<LiveStream />} 
           />
           <Route 
             path="/call/:callId" 
-            element={
-              <ProtectedRoute>
-                <VideoCallNew />
-              </ProtectedRoute>
-            } 
+            element={<CallStudio />} 
           />
           
           {/* Public Landing */}
