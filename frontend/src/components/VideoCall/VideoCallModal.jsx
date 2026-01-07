@@ -30,14 +30,35 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
   const localVideoRef = useRef(null);
   const playRemoteAudio = async (track) => {
     if (!track) return;
-    try { await track.setEnabled(true); } catch (_) {}
-    try { await track.setVolume?.(100); } catch (_) {}
     try {
+      // First ensure the track is enabled
+      await track.setEnabled(true);
+      // Set volume to 100%
+      await track.setVolume?.(100);
+      // Play the track
       await track.play();
+      // Additional audio context handling for better compatibility
+      if (track.getAudioContext) {
+        try {
+          const audioContext = track.getAudioContext();
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+        } catch (e) {
+          console.warn('Audio context handling failed:', e);
+        }
+      }
     } catch (err) {
-      console.warn('Audio autoplay blocked', err);
+      console.warn('Audio play error:', err);
+      // Fallback: Try again with user interaction
       const resume = () => {
-        try { track.play(); } catch (_) {}
+        try { 
+          track.setEnabled(true);
+          track.setVolume?.(100);
+          track.play();
+        } catch (e) {
+          console.error('Retry audio play failed:', e);
+        }
         window.removeEventListener('click', resume);
       };
       window.addEventListener('click', resume, { once: true });
@@ -246,13 +267,39 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
         return;
       }
 
-      // Create client (rtc + h264) for low latency 1:1
-      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
+      // Create client with optimized settings
+      const client = AgoraRTC.createClient({ 
+        mode: 'rtc', 
+        codec: 'h264',
+        // Enable audio preprocessing
+        audio: {
+          AEC: true,      // Acoustic Echo Cancellation
+          AGC: true,      // Automatic Gain Control
+          ANS: true,      // Noise Suppression
+          AEC3: true,     // Better AEC for WebRTC
+          stereo: true,   // Stereo audio
+          fullband: true, // Full-band audio
+          highpass: true  // Enable high-pass filter
+        }
+      });
       clientRef.current = client;
-      // Low-latency settings
-      try { await client.enableDualStream?.(); } catch (_) {}
-      try { await client.setLowStreamParameter?.({ width: 160, height: 90, frameRate: 15, bitrate: 120 }); } catch (_) {}
-      try { await client.setAudioProfile?.('speech_low_latency'); } catch (_) {}
+      
+      // Apply optimization settings
+      try { 
+        await client.enableDualStream?.();
+        await client.setLowStreamParameter?.({
+          width: 320,       // Slightly higher for better quality
+          height: 180,
+          frameRate: 24,    // Smoother video
+          bitrate: 300,     // Higher bitrate for better quality
+          minBitrate: 200,  // Minimum bitrate
+          maxBitrate: 500   // Maximum bitrate
+        });
+        await client.setAudioProfile?.('high_quality_stereo'); // Better audio quality
+        await client.setAudioFrameSize?.(20); // 20ms frame size for better quality
+      } catch (e) {
+        console.warn('Some WebRTC optimizations failed:', e);
+      }
 
       // Remote user handlers
       client.on('user-published', async (user, mediaType) => {
@@ -380,13 +427,22 @@ const VideoCallModal = ({ isOpen, onClose, callData, isIncoming = false, isRingi
       });
 
       // Join channel with optimized options
-      const uid = String(user?.id || user?._id);
+      const uid = String(user?.id || user?._id || Math.floor(Math.random() * 1000000));
       try {
         await client.setClientRole?.('host');
-      } catch (_) {}
-      try {
-        await client.enableAudioVolumeIndicator?.();
-      } catch (_) {}
+        await client.enableAudioVolumeIndicator?.({
+          interval: 200,     // Update volume every 200ms
+          smooth: 3          // Smoother volume changes
+        });
+        // Set audio session configuration
+        await client.setAudioSessionPreset?.({
+          audioQuality: 'high',
+          scenario: 'chat',
+          audioMode: 'voice' 
+        });
+      } catch (e) {
+        console.warn('Audio configuration warning:', e);
+      }
       try {
         await client.join(appId, callData.channelName, callData.token || null, uid || null);
       } catch (joinError) {

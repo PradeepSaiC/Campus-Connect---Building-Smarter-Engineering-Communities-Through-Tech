@@ -713,44 +713,34 @@ app.post('/api/auth/first-login', async (req, res) => {
     student.otpExpiry = otpExpiry;
     await student.save();
 
-    // Send email using Nodemailer
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
+    // Send email using SendGrid
+    const emailResult = await sendEmail({
       to: student.email,
       subject: 'CampusConnect - OTP Verification',
       html: `
-        <h2>CampusConnect OTP Verification</h2>
-        <p>Your OTP is: <strong>${otp}</strong></p>
-        <p>This OTP will expire in 10 minutes.</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #4a6baf;">CampusConnect OTP Verification</h2>
+          <p>Hello ${student.name},</p>
+          <p>Your OTP for registration is: <strong style="font-size: 18px; letter-spacing: 2px;">${otp}</strong></p>
+          <p>This OTP will expire in 10 minutes.</p>
+          <p>If you didn't request this OTP, please ignore this email.</p>
+          <hr style="border: 1px solid #e0e0e0; margin: 20px 0;">
+          <p style="color: #666; font-size: 14px;">This is an automated message, please do not reply.</p>
+        </div>
       `
-    };
+    });
 
-    try {
-      await transporter.sendMail(mailOptions);
-      res.json({ 
-        message: 'OTP sent successfully',
-        student: {
-          name: student.name,
-          email: student.email,
-          usn: student.usn,
-          department: student.department ? {
-            id: student.department._id,
-            name: student.department.name
-          } : null,
-          college: student.college ? {
-            id: student.college._id,
-            collegeName: student.college.collegeName
-          } : null
-        }
-      });
-    } catch (emailError) {
-      console.error('Email sending error:', emailError);
+    if (!emailResult.success) {
+      console.error('Email sending failed:', emailResult.error);
       return res.status(500).json({ 
-        message: 'Email service unavailable. Registration blocked for security.' 
+        success: false,
+        message: 'Failed to send OTP. Please try again later.'
       });
     }
     
-    res.json({ 
+    // Return success response with student data (excluding sensitive info)
+    const responseData = {
+      success: true,
       message: 'OTP sent successfully',
       student: {
         name: student.name,
@@ -765,7 +755,9 @@ app.post('/api/auth/first-login', async (req, res) => {
           collegeName: student.college.collegeName
         } : null
       }
-    });
+    };
+    
+    res.json(responseData);
   } catch (error) {
     console.error('First login error:', error);
     res.status(500).json({ message: 'Internal server error' });

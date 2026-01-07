@@ -5,6 +5,7 @@ import { eventAPI } from '../../services/api.js';
 import { toast } from 'react-hot-toast';
 import { 
   Calendar, 
+  CheckCircle,
   Clock, 
   Users, 
   Play, 
@@ -291,35 +292,66 @@ const EventsList = () => {
                 {/* Action Buttons */}
                 <div className="flex space-x-2 pt-2">
                   {event.isLive && event.streamUrl ? (
-                    <button onClick={() => window.open(event.streamUrl, '_blank')} className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 btn btn-error">
+                    <button 
+                      onClick={() => window.open(event.streamUrl, '_blank')} 
+                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 btn btn-error"
+                    >
                       <Play className="w-4 h-4" />
                       <span>Join Live</span>
                     </button>
                   ) : event.registrationUrl ? (
-                    <a
-                      href={event.registrationUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 btn btn-primary text-center"
-                    >
-                      <Calendar className="w-4 h-4" />
-                      <span>Register</span>
-                    </a>
+                    <div className="w-full space-y-2">
+                      <a
+                        href={event.registrationUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center space-x-2 px-4 py-2 btn btn-primary text-center"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        <span>Register Now</span>
+                      </a>
+                      <p className="text-xs text-center text-gray-500">
+                        External registration required
+                      </p>
+                    </div>
                   ) : (
                     (() => {
                       const myId = user?.id || user?._id;
                       const alreadyJoined = Array.isArray(event.participants) && event.participants.some(p => String(p) === String(myId));
                       const isFull = event.currentParticipants >= event.maxParticipants;
+                      
+                      if (alreadyJoined) {
+                        return (
+                          <div className="w-full text-center">
+                            <button
+                              disabled
+                              className="w-full flex items-center justify-center space-x-2 px-4 py-2 btn btn-success"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                              <span>Registered</span>
+                            </button>
+                            {event.meetingLink && (
+                              <a
+                                href={event.meetingLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-2 inline-block text-sm text-primary-600 hover:underline"
+                              >
+                                Join Meeting
+                              </a>
+                            )}
+                          </div>
+                        );
+                      }
+                      
                       return (
                         <button
                           onClick={() => handleJoinEvent(event._id)}
-                          disabled={isFull || alreadyJoined}
-                          className="flex-1 flex items-center justify-center space-x-2 px-4 py-2 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isFull}
+                          className="w-full flex items-center justify-center space-x-2 px-4 py-2 btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Calendar className="w-4 h-4" />
-                          <span>
-                            {alreadyJoined ? 'Joined' : isFull ? 'Full' : 'Join Event'}
-                          </span>
+                          <span>{isFull ? 'Event Full' : 'Register Now'}</span>
                         </button>
                       );
                     })()
